@@ -2,6 +2,8 @@
 
 Fernal is a desktop companion for Windows: a procedurally generated 3D plant that grows in a transparent, always-on-top window on your desktop. Water, nutrients, temperature, humidity, light and affection shape every branch, so the plant grows lopsided and reacts to how you treat it. The sun and moon cross the top of the window with the real time of day, light and temperature follow your local weather, and time you spend away is replayed when you come back. There are three looks (a glowing world tree, an ordinary tree and a fruit tree) and you can swap the pot for your own `.glb` model. Everything in the window is 3D (Qt Quick 3D); the tools, menus and settings are Qt Widgets. The interface text is Korean.
 
+**Project page (Korean):** https://blackbuddle.github.io/Fernal/ · **Download:** [Fernal-Setup-1.0.0.exe](https://github.com/BlackBuddle/Fernal/releases/latest/download/Fernal-Setup-1.0.0.exe) · **Report (Korean):** [docs/project-introduction.md](docs/project-introduction.md)
+
 <p align="center">
   <img src="docs/screenshots/growth_20.png" width="19%" alt="20 percent grown">
   <img src="docs/screenshots/growth_35.png" width="19%" alt="35 percent grown">
@@ -36,6 +38,16 @@ Fernal is a desktop companion for Windows: a procedurally generated 3D plant tha
 - Internet access is optional. Without it the plant runs on a synthesized sun and the last known weather.
 
 ## Install
+
+### With the installer
+
+Run `Fernal-Setup-1.0.0.exe` (build it as described in "Build the installer" below). It needs no administrator rights: by default Fernal is installed for the current user only, under `%LOCALAPPDATA%\Programs\Fernal`, and a dialog at the start offers an all-users install instead. The wizard is in Korean or English, following the Windows language. Two optional tasks, both off by default, add a desktop shortcut and start Fernal when Windows starts; the Start-menu shortcut is always created.
+
+To uninstall, use Settings > Apps > Installed apps (or the uninstall entry in the Start menu). The uninstaller removes the program and its shortcuts only: the plant's saved state stays in `%APPDATA%\Fernal`, so a reinstall picks up the same plant. Delete that folder by hand for a fresh start. Quit Fernal (tray menu) before uninstalling.
+
+The installer is not code-signed, so Windows SmartScreen may warn the first time you run it ("More info", then "Run anyway").
+
+### From source
 
 ```bat
 python -m venv .venv
@@ -150,6 +162,25 @@ python -m pytest -q
 
 About a hundred tests run in under ten seconds: simulation, skeleton, mesh, sky and weather parsing, the tool panels, the overlay window and the controller. They create hidden Qt windows (so run them in a desktop session) and need no network.
 
+## Build the installer
+
+The installer is built on Windows with one command from the repository root:
+
+```bat
+pip install pyinstaller
+.venv\Scripts\python packaging\build.py
+```
+
+You need [Inno Setup 6](https://jrsoftware.org/isinfo.php) (with its Korean language file, which the standard install includes) and PyInstaller in the virtual environment. PyInstaller is a build tool only and is not in `requirements.txt`. `build.py` finds the Inno Setup compiler through the `ISCC` environment variable (full path to `ISCC.exe`) or the usual install folders, and stops with a clear message if it is missing.
+
+The script runs three steps and prints the result at the end:
+
+1. `packaging/make_icon.py` draws the leaf glyph at 16 to 256 px into `packaging/fernal.ico`.
+2. PyInstaller builds `packaging/fernal.spec` into `dist/Fernal/` (a windowed one-folder app, about 136 MB). The spec drops the Qt modules, QML folders and plugins the app never loads (WebEngine, Qt3D, Charts, Multimedia and the rest of PyInstaller's default bundle of about 450 MB) and keeps Qt Quick 3D with Helpers, Particles3D and the asset importer for custom `.glb` pots.
+3. Inno Setup compiles `packaging/fernal.iss` into `packaging/Output/Fernal-Setup-1.0.0.exe` (about 38 MB).
+
+`build/`, `dist/` and `packaging/Output/` are git-ignored. To try the frozen app without installing it, run `dist\Fernal\Fernal.exe --screenshot out.png`. The version number is in two places: `VERSION` in `packaging/fernal.spec` and `AppVersion` plus `OutputBaseFilename` in `packaging/fernal.iss`.
+
 ## Project layout
 
 ```
@@ -167,6 +198,12 @@ fernal/
   qml/Scene.qml     the only QML file: the 3D scene
   qml/shaders/      wind, bark, leaf, fruit, contact and celestial shaders
   assets/           bark, bark normal and leaf textures, tray icon
+packaging/
+  build.py          one-command build: icon, PyInstaller, Inno Setup
+  fernal.spec       PyInstaller spec (one folder, windowed, trimmed Qt)
+  fernal.iss        Inno Setup script
+  launcher.py       entry script of the frozen app
+  make_icon.py      writes fernal.ico from the leaf glyph
 scripts/
   make_textures.py  regenerates fernal/assets/*.png
   preview_*.py, spike_overlay.py, spike.qml   throwaway harnesses from development

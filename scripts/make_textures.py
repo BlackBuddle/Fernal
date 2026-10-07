@@ -327,8 +327,16 @@ def make_leaf(path, size=LEAF_SIZE):
 
 # -------------------------------------------------------------------- tray
 
-def make_tray(path, size=TRAY_SIZE):
-    """Leaf glyph tilted towards the upper right, readable at 16 px."""
+def render_tray(size=TRAY_SIZE):
+    """Leaf glyph tilted towards the upper right, drawn crisply at any size (QImage, ARGB32 premultiplied).
+
+    Margin and vein width scale with size relative to TRAY_SIZE, so the 64 px tray icon is unchanged and the
+    larger icon sizes (packaging/make_icon.py) are redrawn, not upscaled. The vein never gets thinner than
+    1.5 px, so it still reads at 16 px.
+    """
+    scale = size / TRAY_SIZE
+    margin = 6 * scale
+    vein_px = max(3.6 * scale, 1.5)
     leaf = QPainterPath(QPointF(0, 26))
     leaf.cubicTo(QPointF(20, 15), QPointF(17, -15), QPointF(0, -30))
     leaf.cubicTo(QPointF(-17, -15), QPointF(-20, 15), QPointF(0, 26))
@@ -343,7 +351,7 @@ def make_tray(path, size=TRAY_SIZE):
 
     rot = QTransform().rotate(40)
     box = rot.map(glyph).boundingRect()
-    s = (size - 6) / max(box.width(), box.height())
+    s = (size - margin) / max(box.width(), box.height())
     c = box.center()
     xf = rot * QTransform.fromScale(s, s) * QTransform.fromTranslate(
         size / 2 - c.x() * s, size / 2 - c.y() * s
@@ -355,10 +363,14 @@ def make_tray(path, size=TRAY_SIZE):
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     p.setTransform(xf)
     p.fillPath(glyph, QColor("#5FA85A"))
-    p.setPen(QPen(QColor("#D6EFD0"), 3.6 / s, Qt.PenStyle.SolidLine, ROUND))
+    p.setPen(QPen(QColor("#D6EFD0"), vein_px / s, Qt.PenStyle.SolidLine, ROUND))
     p.drawPath(vein)
     p.end()
-    if not img.save(str(path), "PNG"):
+    return img
+
+
+def make_tray(path, size=TRAY_SIZE):
+    if not render_tray(size).save(str(path), "PNG"):
         raise RuntimeError(f"could not write {path}")
 
 
