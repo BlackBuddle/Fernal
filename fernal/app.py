@@ -651,7 +651,7 @@ class App(QObject):
             panel.set_value(env.nutrients)
         elif key == "spray":
             panel.set_value(env.humidity)
-            caption = f"실내 습도 {round(env.humidity * 100)}%"
+            caption = ""   # the gauge row already reads out the humidity
         elif key == "climate":
             if not panel.slider.isSliderDown():   # never fight the user's drag
                 panel.set_value((st.controls.heater + 10.0) / 20.0)
