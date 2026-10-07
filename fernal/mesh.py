@@ -78,6 +78,24 @@ def _frame(n):
     return t, np.cross(n, t)
 
 
+def _tip_radius(parent, radius, g):
+    """Tip radius per segment: TIP_RADIUS * base, blending toward the thickest child's base radius
+    as that child grows, so chained segments join without a step."""
+    tip = radius * TIP_RADIUS
+    kids = np.flatnonzero(parent >= 0)
+    if len(kids) == 0:
+        return tip
+    order = kids[np.argsort(radius[kids], kind="stable")]  # thickest child is assigned last and wins
+    kid_r = np.zeros(len(radius))
+    kid_g = np.zeros(len(radius))
+    has = np.zeros(len(radius), bool)
+    kid_r[parent[order]] = radius[order]
+    kid_g[parent[order]] = g[order]
+    has[parent[order]] = True
+    blend = np.where(has, tip + (np.minimum(kid_r, radius) - tip) * kid_g, tip)
+    return np.maximum(blend, 0.05 * radius)
+
+
 def branch_arrays(skel, age: float):
     """A 6-sided tube per segment with growth > 0; length and radius scale with growth."""
     segs = skel.segments
@@ -85,8 +103,10 @@ def branch_arrays(skel, age: float):
         return _empty()
     info = np.array([(s.id, s.depth, s.radius, s.birth_age, s.grow_hours) for s in segs], np.float64)
     ids, depth, radius, birth, hours = info.T
+    parent = np.array([s.parent for s in segs], np.int64)
     max_depth = max(1.0, depth.max())
     g = growth(age, birth, hours)
+    tip_r = _tip_radius(parent, radius, g)
     vis = g > 0.0
     count = int(vis.sum())
     if count == 0:
@@ -94,7 +114,7 @@ def branch_arrays(skel, age: float):
 
     start = np.array([s.start for s in segs], np.float64)[vis]
     delta = np.array([s.end for s in segs], np.float64)[vis] - start
-    ids, depth, radius, g = ids[vis], depth[vis], radius[vis], g[vis]
+    ids, depth, radius, g, tip_r = ids[vis], depth[vis], radius[vis], g[vis], tip_r[vis]
     length = np.linalg.norm(delta, axis=1)
     d = _unit(delta)
     u, v = _frame(d)  # u x v == d, so increasing angle runs counter-clockwise seen from the tip
@@ -103,10 +123,10 @@ def branch_arrays(skel, age: float):
 
     pos = np.empty((count, 2, SIDES, 3))
     pos[:, 0] = start[:, None, :] + (radius * g)[:, None, None] * ring
-    pos[:, 1] = (start + delta * g[:, None])[:, None, :] + (radius * TIP_RADIUS * g)[:, None, None] * ring
+    pos[:, 1] = (start + delta * g[:, None])[:, None, :] + (tip_r * g)[:, None, None] * ring
 
     # The surface leans toward the tip by the taper slope; both rings share the normal.
-    slope = (1.0 - TIP_RADIUS) * radius / np.maximum(length, 1e-9)
+    slope = (radius - tip_r) / np.maximum(length, 1e-9)
     side = ring + d[:, None, :] * slope[:, None, None]
     side /= np.linalg.norm(side, axis=2, keepdims=True)
     nrm = np.broadcast_to(side[:, None], pos.shape)

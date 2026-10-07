@@ -223,3 +223,21 @@ def test_plant_geometry_import(qapp):
     assert offsets == [0, 12, 24, 32]
     geo.set_arrays(mesh.branch_arrays(SimpleNamespace(segments=[]), 1.0))  # empty upload is allowed
     assert geo.indexData().size() == 0
+
+
+def test_tube_tip_joins_thickest_child_base():
+    segs = [
+        seg(0, -1, 0, (0, 0, 0), (0, 50, 0), radius=4.0, hours=10.0),
+        seg(1, 0, 1, (0, 50, 0), (0, 100, 0), radius=3.6, birth=20.0, hours=10.0),
+    ]
+    skel = SimpleNamespace(segments=segs)
+
+    def ring_radii(age):
+        pos = mesh.branch_arrays(skel, age)[0].astype(np.float64)
+        return np.hypot(pos[:, 0], pos[:, 2])
+
+    unborn = ring_radii(15.0)  # child not born yet: the parent tip keeps the plain 0.7 taper
+    assert unborn[6:12] == pytest.approx(4.0 * mesh.TIP_RADIUS, abs=1e-4)
+    grown = ring_radii(100.0)  # both fully grown: parent tip ring == child base ring
+    assert grown[6:12] == pytest.approx(3.6, abs=1e-4)
+    assert grown[12:18] == pytest.approx(3.6, abs=1e-4)
