@@ -11,6 +11,8 @@ from PySide6.QtGui import QAction, QActionGroup, QCursor, QIcon
 from PySide6.QtQuick import QQuickView, QQuickWindow
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
+from . import themes
+
 log = logging.getLogger(__name__)
 
 DEFAULT_SCENE = Path(__file__).resolve().parent / "qml" / "Scene.qml"
@@ -18,13 +20,8 @@ DEFAULT_SIZE = (420, 640)
 DRAG_THRESHOLD_PX = 4
 DEBUG_MODIFIERS = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
 
-# Theme keys and their Korean menu labels (kept local on purpose; themes.py is the source of truth
-# for everything else).
-THEME_LABELS = (
-    ("erdtree", "세계수"),
-    ("normal", "일반 나무"),
-    ("fruit", "열매 나무"),
-)
+# (theme key, Korean menu label) in menu order, straight from the theme table.
+THEME_LABELS = tuple((key, t["label"]) for key, t in themes.THEMES.items())
 
 
 def _prop(name, kind, default, notify):
@@ -144,6 +141,8 @@ class OverlayWindow(QQuickView):
     # ---- events -------------------------------------------------------------------------
 
     def event(self, e):
+        # Only hover needs the generic handler. Keep this override small: a Python event() is what forces
+        # QSG_RENDER_LOOP=basic in __main__ (the threaded render loop hangs with it).
         if e.type() == QEvent.Type.Enter:
             self.hovered.emit()
         return super().event(e)

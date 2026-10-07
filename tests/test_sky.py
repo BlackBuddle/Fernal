@@ -145,3 +145,22 @@ def test_geocode_no_results_or_failure_returns_none(monkeypatch):
     patch_urlopen_failure(monkeypatch)
     assert sky.geocode("Seoul") is None
     assert sky.geocode("   ") is None
+
+
+def test_fetch_weather_rejects_non_finite_values(monkeypatch):
+    # json.loads accepts NaN and Infinity; they must never reach the simulation or state.json.
+    for bad in (b"NaN", b"Infinity", b"-Infinity"):
+        body = (b'{"current": {"temperature_2m": ' + bad
+                + b', "relative_humidity_2m": 60, "shortwave_radiation": 400}}')
+        patch_urlopen(monkeypatch, body)
+        assert sky.fetch_weather(*SEOUL) is None
+    patch_urlopen(monkeypatch, b'{"current": {"temperature_2m": 20, "relative_humidity_2m": null, '
+                               b'"shortwave_radiation": 400}}')
+    assert sky.fetch_weather(*SEOUL) is None
+
+
+def test_geocode_rejects_impossible_coordinates(monkeypatch):
+    for lat, lon in ((91.0, 10.0), (10.0, 181.0), (float("nan"), 10.0)):
+        body = json.dumps({"results": [{"name": "X", "latitude": lat, "longitude": lon}]}).encode("utf-8")
+        patch_urlopen(monkeypatch, body)
+        assert sky.geocode("X") is None

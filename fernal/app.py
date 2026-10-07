@@ -1,7 +1,8 @@
 """Controller: owns the plant state, the timers and the overlay window.
 
-Scene axes: x = east, y = up, z = south. Everything Qt-free that is worth testing lives in module-level
-helpers (`params_moved`, `clamp_window`, `effective_radiation`, `mean_radiation`, `local_time_at`).
+Scene axes: x = east, y = up, z = south. Everything that is worth testing without a window lives in
+module-level helpers (`params_moved`, `clamp_window`, `place_beside`, `effective_radiation`, `mean_radiation`,
+`local_time_at`, `pot_url`, `default_state_path`).
 """
 import dataclasses
 import logging
@@ -226,7 +227,11 @@ class _WeatherSignals(QObject):
 
 
 class _WeatherJob(QRunnable):
-    """Fetches the weather off the main thread; the result travels back through a queued signal."""
+    """Fetches the weather off the main thread; the result travels back through a queued signal.
+
+    The worker touches no Qt object except emitting `done`; everything else happens in the slot, which
+    lives on the main thread (a signal emitted from a pool thread to a QObject slot is queued).
+    """
 
     def __init__(self, lat: float, lon: float, signals: _WeatherSignals):
         super().__init__()
@@ -237,7 +242,10 @@ class _WeatherJob(QRunnable):
         try:
             result = sky.fetch_weather(self._lat, self._lon)  # returns None on any failure
         finally:
-            self._signals.done.emit(result)
+            try:
+                self._signals.done.emit(result)
+            except RuntimeError:
+                pass    # the app quit while the request ran: its signal object is already deleted
 
 
 class _GeocodeSignals(QObject):
@@ -245,7 +253,7 @@ class _GeocodeSignals(QObject):
 
 
 class _GeocodeJob(QRunnable):
-    """Looks a city up off the main thread; the result travels back through a queued signal."""
+    """Looks a city up off the main thread; the result travels back through a queued signal (see _WeatherJob)."""
 
     def __init__(self, name: str, signals: _GeocodeSignals):
         super().__init__()
@@ -256,7 +264,10 @@ class _GeocodeJob(QRunnable):
         try:
             result = sky.geocode(self._name)  # returns None on any failure
         finally:
-            self._signals.done.emit(self._name, result)
+            try:
+                self._signals.done.emit(self._name, result)
+            except RuntimeError:
+                pass    # the app quit while the request ran
 
 
 # ---- controller ----------------------------------------------------------------------------
@@ -287,6 +298,7 @@ class App(QObject):
         self._weather_ok = False            # a fetch succeeded in this session
         self._fetching = False
         self._weather_stale = False         # the place changed while a fetch was running
+        self._geocode_wanted = None         # the city name of the newest lookup; older answers are dropped
         self._panels = {}                   # key -> GlassPanel, created on first use and kept
         self._placed = 0                    # panels placed so far (cascade index)
         self._shot_armed = False
@@ -342,6 +354,8 @@ class App(QObject):
                 self.tray = overlay.Tray(QIcon(str(ASSETS_DIR / "tray.png")), self.menu)
             else:
                 log.warning("no system tray available")
+                # With click-through on, the tray menu is the only control left; without a tray there is no way back.
+                self.actions["clickthrough"].setEnabled(False)
             self._qapp.aboutToQuit.connect(self._shutdown)
 
         self._generate_now()
@@ -557,6 +571,9 @@ class App(QObject):
             log.warning("could not save %s: %s", self._state_path, exc)
 
     def _shutdown(self):
+        for timer in (self._tick_timer, self._save_timer, self._weather_timer, self._regen_timer,
+                      self._heater_timer):
+            timer.stop()
         self.save_state()
         for panel in self._panels.values():
             panel.close()
@@ -784,10 +801,13 @@ class App(QObject):
         panel = self._panels.get("settings")
         if panel is not None:
             panel.set_status("찾는 중…")
+        self._geocode_wanted = name
         QThreadPool.globalInstance().start(_GeocodeJob(name, self._geocode_signals))
 
     @Slot(str, object)
     def _on_geocode(self, name: str, place):
+        if name != self._geocode_wanted:
+            return  # a newer lookup is on its way; the slower, older answer must not win
         panel = self._panels.get("settings")
         try:
             city, lat, lon = str(place["city"]), float(place["lat"]), float(place["lon"])

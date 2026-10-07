@@ -1,3 +1,5 @@
+import argparse
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -5,11 +7,13 @@ from PySide6.QtCore import QRect, QSize, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from fernal import sim, sky, tree
+from fernal import app as appmod
+from fernal import sim, sky, themes, tree
 from fernal.app import (PANEL_CASCADE, PANEL_GAP, clamp_window, effective_radiation, local_time_at, mean_radiation,
                         params_moved, place_beside)
 from fernal.debug_panel import DebugPanel, pos_of_scale, scale_at
-from fernal.tools import GlassPanel
+from fernal.overlay import THEME_LABELS
+from fernal.tools import THEME_CHOICES, GlassPanel
 
 SCREEN = (0, 0, 1920, 1080)
 SECOND = (1920, 0, 1280, 1024)
@@ -227,3 +231,144 @@ def test_debug_panel_is_a_glass_panel_with_accent(panel):
     assert isinstance(panel, GlassPanel)
     panel.set_accent("#E2563A")
     assert panel.accent().name().upper() == "#E2563A"
+
+
+# ---- controller (a real App with its window, never shown, on a temporary state file) ---------
+
+def _args(tmp_path, **extra):
+    return argparse.Namespace(screenshot=None, theme=None, age=None, seed=1, hour=None,
+                              state=str(tmp_path / "state.json"), **extra)
+
+
+def _wait_until(condition, timeout_ms=3000):
+    waited = 0
+    while not condition() and waited < timeout_ms:
+        QTest.qWait(20)
+        waited += 20
+    return condition()
+
+
+@pytest.fixture
+def controller(tmp_path):
+    c = appmod.App(_args(tmp_path))
+    yield c
+    c._shutdown()
+    c.window.destroy()
+
+
+def test_pot_url_falls_back_to_the_default_pot(tmp_path):
+    pot = tmp_path / "pot.glb"
+    pot.write_bytes(b"glTF")
+    assert appmod.pot_url("") == ""
+    assert appmod.pot_url(str(tmp_path / "missing.glb")) == ""
+    assert appmod.pot_url(str(pot)).startswith("file:///") and appmod.pot_url(str(pot)).endswith("/pot.glb")
+
+
+def test_theme_labels_come_from_the_theme_table():
+    expected = tuple((key, t["label"]) for key, t in themes.THEMES.items())
+    assert THEME_LABELS == expected and THEME_CHOICES == expected
+
+
+def test_regenerate_requests_are_coalesced(controller, monkeypatch):
+    """Review focus 4: slider spam. A burst of requests costs one skeleton, not one per request."""
+    calls = []
+    real = tree.generate
+    monkeypatch.setattr(tree, "generate", lambda *a, **k: calls.append(1) or real(*a, **k))
+    for _ in range(200):
+        controller.regenerate()
+    assert calls == []                      # nothing runs inside the 50 ms window
+    assert _wait_until(lambda: calls)
+    QTest.qWait(150)
+    assert len(calls) == 1
+    controller.regenerate(immediate=True)
+    assert len(calls) == 2
+
+
+def test_weather_arrives_on_the_main_thread_through_a_signal(controller, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(sky, "fetch_weather", lambda lat, lon, timeout=5.0: (
+        seen.__setitem__("worker", threading.get_ident()),
+        {"temperature": 11.0, "humidity": 0.4, "radiation": 0.2})[1])
+    real_slot = appmod.App._on_weather
+
+    def on_weather(self, weather):
+        seen["slot"] = threading.get_ident()
+        real_slot(self, weather)
+
+    monkeypatch.setattr(appmod.App, "_on_weather", on_weather)
+    c = controller
+    c._weather_signals.done.disconnect()
+    c._weather_signals.done.connect(c._on_weather)   # reconnect to the patched slot
+    c._start_weather_fetch()
+    assert _wait_until(lambda: "slot" in seen)
+    assert seen["worker"] != threading.get_ident()          # the request ran on a pool thread
+    assert seen["slot"] == threading.get_ident()            # the result was applied on the main thread
+    assert c.state.outdoor == sim.Outdoor(temperature=11.0, humidity=0.4, radiation=0.2)
+
+
+def test_failed_weather_keeps_the_last_values(controller, monkeypatch):
+    """Review focus 1 at app level: offline means fetch_weather gives None and nothing changes."""
+    controller.state.outdoor = sim.Outdoor(temperature=5.0, humidity=0.3, radiation=0.1)
+    monkeypatch.setattr(sky, "fetch_weather", lambda *a, **k: None)
+    controller._start_weather_fetch()
+    assert _wait_until(lambda: not controller._fetching)
+    assert controller.state.outdoor == sim.Outdoor(temperature=5.0, humidity=0.3, radiation=0.1)
+    assert not controller._weather_ok
+
+
+def test_a_stale_geocode_answer_is_dropped(controller, monkeypatch):
+    monkeypatch.setattr(sky, "fetch_weather", lambda *a, **k: None)
+    controller._geocode_wanted = "Busan"
+    controller._on_geocode("Seoul", {"city": "Seoul", "lat": 37.5, "lon": 127.0})
+    assert controller.state.city == "Seoul" and controller.state.lat == 37.57      # the defaults, untouched
+    controller._on_geocode("Busan", {"city": "Busan", "lat": 35.1, "lon": 129.0})
+    assert (controller.state.city, controller.state.lat, controller.state.lon) == ("Busan", 35.1, 129.0)
+    assert _wait_until(lambda: not controller._fetching)
+
+
+def test_shutdown_stops_the_timers_and_saves_once(controller, monkeypatch):
+    saves = []
+    real = sim.save
+    monkeypatch.setattr(sim, "save", lambda *a, **k: saves.append(1) or real(*a, **k))
+    for timer in (controller._tick_timer, controller._save_timer, controller._weather_timer):
+        timer.start()
+    controller._shutdown()
+    assert len(saves) == 1
+    assert not any(t.isActive() for t in (controller._tick_timer, controller._save_timer, controller._weather_timer))
+    assert controller._state_path.is_file()
+
+
+def test_corrupt_state_file_starts_a_fresh_plant(tmp_path):
+    (tmp_path / "state.json").write_text("{not json", encoding="utf-8")
+    c = appmod.App(_args(tmp_path))
+    try:
+        assert (tmp_path / "state.json.bak").read_text(encoding="utf-8") == "{not json"
+        assert c.state.controls.time_scale == appmod.FIRST_RUN_TIME_SCALE
+        assert c.state.age == appmod.FIRST_RUN_AGE
+    finally:
+        c.window.destroy()
+
+
+def test_offscreen_window_and_missing_pot_fall_back(tmp_path):
+    """Review focus 5: a saved position on no screen is recentered, a pot file that is gone shows the default."""
+    state = sim.PlantState(pot_path=str(tmp_path / "gone.glb"), window={"x": 99999, "y": 99999, "w": 420, "h": 640})
+    sim.save(state, tmp_path / "state.json")
+    c = appmod.App(_args(tmp_path))
+    try:
+        assert c.bridge.potSource == ""
+        screens = appmod._screen_rects()
+        g = c.window.geometry()
+        assert any(sx <= g.center().x() < sx + sw and sy <= g.center().y() < sy + sh for sx, sy, sw, sh in screens)
+        assert c.state.window["x"] != 99999
+    finally:
+        c.window.destroy()
+
+
+def test_click_through_is_disabled_without_a_tray(tmp_path, monkeypatch):
+    """With no tray icon there would be no way out of click-through, so the menu entry is disabled."""
+    monkeypatch.setattr(appmod.QSystemTrayIcon, "isSystemTrayAvailable", staticmethod(lambda: False))
+    c = appmod.App(_args(tmp_path))
+    try:
+        assert c.tray is None and not c.actions["clickthrough"].isEnabled()
+    finally:
+        c.window.destroy()

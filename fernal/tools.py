@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QComboBox, QFi
                                QLineEdit, QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget)
 
 from .sim import OPTIMUM
+from .themes import THEMES
 
 # ---------------------------------------------------------------------------------------------------------------
 # Look and feel (tokens; see docs/design/design-plan.md)
@@ -37,7 +38,6 @@ FOOTER_H = 46
 GLASS = QColor(18, 22, 21)          # mixed GLASS_TINT toward the theme accent: moss, umber or clay glass
 GLASS_ALPHA = 0.80
 GLASS_TINT = 0.07
-FILL = QColor(GLASS.red(), GLASS.green(), GLASS.blue(), round(GLASS_ALPHA * 255))
 BORDER = QColor(255, 255, 255, round(0.09 * 255))
 TEXT = QColor(236, 238, 232)
 TEXT_DIM = QColor(236, 238, 232, 153)
@@ -52,7 +52,7 @@ SMALL_PX = 12
 
 CONFIRM_MS = 1600                   # how long an action button shows its done phrase
 
-THEME_CHOICES = (("erdtree", "세계수"), ("normal", "일반 나무"), ("fruit", "열매 나무"))
+THEME_CHOICES = tuple((key, t["label"]) for key, t in THEMES.items())    # (key, Korean label), themes.py order
 
 _SANS = ("Noto Sans KR", "Malgun Gothic", "Segoe UI")
 _SERIF = ("Noto Serif KR", "Batang", "Georgia")
@@ -826,7 +826,7 @@ class ToolPanel(GlassPanel):
         self.gauge: _Gauge | None = None
         self.button: _Button | None = None
         self.slider: _ClimateSlider | None = None
-        self.value_row = self.reading = _Reading()
+        self.reading = _Reading()
         self.body.addWidget(self.reading)
         self.body.addSpacing(6)
 

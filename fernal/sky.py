@@ -80,13 +80,16 @@ def fetch_weather(lat: float, lon: float, timeout: float = 5.0) -> "dict | None"
     )
     try:
         cur = _get_json(f"{_FORECAST_URL}?{query}", timeout)["current"]
-        return {
+        weather = {
             "temperature": float(cur["temperature_2m"]),
             "humidity": float(cur["relative_humidity_2m"]) / 100.0,
             "radiation": max(0.0, min(1.0, float(cur["shortwave_radiation"]) / _FULL_SUN_WM2)),
         }
     except Exception:
         return None
+    # json accepts the literals NaN and Infinity; one of them would reach state.json and make the next
+    # load treat the whole file as corrupt.
+    return weather if all(map(math.isfinite, weather.values())) else None
 
 
 def geocode(name: str, timeout: float = 5.0) -> "dict | None":
@@ -96,10 +99,12 @@ def geocode(name: str, timeout: float = 5.0) -> "dict | None":
     query = urllib.parse.urlencode({"name": name.strip(), "count": 1, "language": "ko"})
     try:
         hit = _get_json(f"{_GEOCODE_URL}?{query}", timeout)["results"][0]
-        return {
+        place = {
             "city": str(hit["name"]),
             "lat": float(hit["latitude"]),
             "lon": float(hit["longitude"]),
         }
     except Exception:
         return None
+    # Same guard as fetch_weather: the position is saved in state.json and must be a real coordinate.
+    return place if -90.0 <= place["lat"] <= 90.0 and -180.0 <= place["lon"] <= 180.0 else None

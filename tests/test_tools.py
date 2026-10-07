@@ -115,3 +115,14 @@ def test_theme_choice_keys_switch_the_tree(app):
     QTest.keyClick(panel.theme_combo, Qt.Key.Key_Left)
     QTest.keyClick(panel.theme_combo, Qt.Key.Key_Right)
     assert got == [("erdtree",), ("normal",)]
+
+
+def test_climate_slider_spam_is_throttled(app):
+    """Review focus 4: hundreds of slider moves reach the controller as a handful of updates, last value last."""
+    panel = ToolPanel("climate", "#E8C06A")
+    got = _record(panel.action)
+    for i in range(300):
+        panel.slider.setValue(-10 if i % 2 else 10)
+    QTest.qWait(250)
+    assert 1 <= len(got) <= 6
+    assert got[-1] == ("heater", -10.0)
