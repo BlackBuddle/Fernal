@@ -12,12 +12,13 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, QStandardPaths, QThreadPool, QTimer, QUrl, Qt, Signal, Slot
-from PySide6.QtGui import QGuiApplication, QIcon
+from PySide6.QtCore import (QObject, QPoint, QRunnable, QStandardPaths, QThreadPool, QTimer, QUrl, Qt, Signal,
+                            Slot)
+from PySide6.QtGui import QGuiApplication, QIcon, QKeySequence, QShortcut
 from PySide6.QtQuick import QQuickView
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QFileDialog, QSystemTrayIcon
 
-from . import mesh, overlay, sim, sky, themes, tree
+from . import debug_panel, mesh, overlay, sim, sky, themes, tools, tree
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ TICK_MS = 1000
 SAVE_MS = 60_000
 WEATHER_MS = 3_600_000
 REGEN_MS = 50                   # regenerate requests inside this window are coalesced
+HEATER_REGEN_MS = 250           # while the climate slider moves, regenerate once it pauses this long
 MESH_MIN_INTERVAL = 0.1         # s between growth-driven mesh rebuilds
 REGEN_THRESHOLD = 0.03          # a Params field must move by this share of its range to regenerate
 CATCH_UP_GAP = 60.0             # s: a longer tick gap (sleep, stall) is replayed through sim.catch_up
@@ -34,7 +36,7 @@ CATCH_UP_CAP = 7 * 86400.0      # s, same cap as sim.catch_up
 OFFLINE_RADIATION = 0.7         # synthesized peak radiation before the first successful weather fetch
 WIND_STRENGTH = 0.4
 
-FIRST_RUN_AGE = 45.0            # plant hours: the first launch already shows a young leafy tree
+FIRST_RUN_AGE = 48.0            # plant hours: the first launch already shows a young leafy tree
 FIRST_RUN_TIME_SCALE = 8.0      # a plant matures in roughly a day
 MATURE_AGE = 1e6                # screenshot default: everything fully grown
 
@@ -46,6 +48,12 @@ ZOOM_PER_DELTA = 0.5            # cm per wheel delta unit (one notch = 120)
 
 WINDOW_MIN_SIZE = 100
 WINDOW_MIN_VISIBLE = 40         # px of a saved window that must still lie on a screen
+
+PANEL_GAP = 12                  # px between the overlay window and a panel placed beside it
+PANEL_CASCADE = 24              # px each further panel is shifted (outward in x, down in y)
+DEBUG_SHORTCUT = "Ctrl+Shift+D"
+POT_MISSING = "화분 파일을 찾을 수 없습니다"
+CITY_MISSING = "도시를 찾지 못했습니다"
 
 SCREENSHOT_SETTLE_MS = 1500     # rendering time after the first swapped frame before the grab
 SCREENSHOT_TIMEOUT_MS = 30_000
@@ -131,6 +139,34 @@ def clamp_window(rect: dict, screens: list, min_visible: int = WINDOW_MIN_VISIBL
     return dict(rect, x=sx + (sw - w) // 2, y=sy + (sh - h) // 2, w=w, h=h)
 
 
+def place_beside(window_rect, panel_size, screens: list, index: int = 0) -> QPoint:
+    """Top-left corner for a panel next to the overlay window.
+
+    `window_rect` is (x, y, w, h) or a QRect, `panel_size` is (w, h) or a QSize and `screens` holds
+    available-geometry tuples (x, y, w, h) as from `_screen_rects`. The panel goes on the right of the window
+    if it fits on the window's screen, otherwise on its left, top aligned with the window. Panel number
+    `index` is shifted by PANEL_CASCADE px per step (away from the window in x, down in y). The result is
+    kept on the screen.
+    """
+    wx, wy, ww, wh = (window_rect.x(), window_rect.y(), window_rect.width(), window_rect.height()) \
+        if hasattr(window_rect, "width") else window_rect
+    pw, ph = (panel_size.width(), panel_size.height()) if hasattr(panel_size, "width") else panel_size
+    cx, cy = wx + ww / 2, wy + wh / 2
+    screen = next((s for s in screens if s[0] <= cx < s[0] + s[2] and s[1] <= cy < s[1] + s[3]),
+                  screens[0] if screens else None)
+    right, left = wx + ww + PANEL_GAP, wx - PANEL_GAP - pw
+    side = 1
+    if screen is not None and right + pw > screen[0] + screen[2] and left >= screen[0]:
+        side = -1
+    x = (right if side > 0 else left) + side * PANEL_CASCADE * index
+    y = wy + PANEL_CASCADE * index
+    if screen is not None:
+        sx, sy, sw, sh = screen
+        x = max(sx, min(x, sx + sw - pw))
+        y = max(sy, min(y, sy + sh - ph))
+    return QPoint(round(x), round(y))
+
+
 def effective_radiation(radiation: "float | None", elevation_deg: float) -> float:
     """Radiation (0..1) the plant actually receives: never more than the sky allows.
 
@@ -204,6 +240,25 @@ class _WeatherJob(QRunnable):
             self._signals.done.emit(result)
 
 
+class _GeocodeSignals(QObject):
+    done = Signal(str, object)  # the name that was asked for, dict from sky.geocode or None
+
+
+class _GeocodeJob(QRunnable):
+    """Looks a city up off the main thread; the result travels back through a queued signal."""
+
+    def __init__(self, name: str, signals: _GeocodeSignals):
+        super().__init__()
+        self._name, self._signals = name, signals
+
+    def run(self):
+        result = None
+        try:
+            result = sky.geocode(self._name)  # returns None on any failure
+        finally:
+            self._signals.done.emit(self._name, result)
+
+
 # ---- controller ----------------------------------------------------------------------------
 
 
@@ -231,6 +286,9 @@ class App(QObject):
         self._elevation = 0.0
         self._weather_ok = False            # a fetch succeeded in this session
         self._fetching = False
+        self._weather_stale = False         # the place changed while a fetch was running
+        self._panels = {}                   # key -> GlassPanel, created on first use and kept
+        self._placed = 0                    # panels placed so far (cascade index)
         self._shot_armed = False
         self._shot_done = False
         self._state_path = None
@@ -258,6 +316,7 @@ class App(QObject):
         self.window.orbitRequested.connect(self._on_orbit)
         self.window.zoomRequested.connect(self._on_zoom)
         self.window.menuRequested.connect(self._on_menu_requested)
+        self.window.debugRequested.connect(self.open_debug)
 
         self.menu, self.actions = overlay.build_menu(None, self.state.theme, self.click_through)
         self._wire_menu()
@@ -266,11 +325,17 @@ class App(QObject):
         self._regen_timer.setSingleShot(True)
         self._regen_timer.setInterval(REGEN_MS)
         self._regen_timer.timeout.connect(self._generate_now)
+        self._heater_timer = QTimer(self)
+        self._heater_timer.setSingleShot(True)
+        self._heater_timer.setInterval(HEATER_REGEN_MS)
+        self._heater_timer.timeout.connect(self.regenerate)
         self._tick_timer = self._make_timer(TICK_MS, self._tick)
         self._save_timer = self._make_timer(SAVE_MS, self.save_state)
         self._weather_timer = self._make_timer(WEATHER_MS, self._start_weather_fetch)
         self._weather_signals = _WeatherSignals(self)
         self._weather_signals.done.connect(self._on_weather)
+        self._geocode_signals = _GeocodeSignals(self)
+        self._geocode_signals.done.connect(self._on_geocode)
 
         if not self.screenshot_path:
             if QSystemTrayIcon.isSystemTrayAvailable():
@@ -366,9 +431,16 @@ class App(QObject):
         b.accentColor = t["accent"]
         b.glowEnabled = t["glow"]
         b.particlesEnabled = True
+        for panel in self._panels.values():
+            panel.set_accent(t["accent"])
 
     def _apply_pot(self):
         self.bridge.potSource = pot_url(self.state.pot_path)
+
+    @property
+    def mature_age(self) -> float:
+        """Plant age at which the current skeleton, its leaves and its fruits are fully grown."""
+        return self._mature_age
 
     def sun_dir(self) -> tuple:
         """Unit vector toward the sun at local 13:00 today: x = east, y = up, z = south."""
@@ -447,17 +519,23 @@ class App(QObject):
         if self._needs_regenerate():
             self.regenerate()
         self._grow_meshes()
+        self._refresh_panels()
 
     def _start_weather_fetch(self):
         if self._fetching:
+            self._weather_stale = True   # refetch once the running request is done
             return
         self._fetching = True
+        self._weather_stale = False
         QThreadPool.globalInstance().start(
             _WeatherJob(self.state.lat, self.state.lon, self._weather_signals))
 
     @Slot(object)
     def _on_weather(self, weather):
         self._fetching = False
+        if self._weather_stale:   # the answer belongs to a place the user has left
+            self._start_weather_fetch()
+            return
         if not weather:
             return  # offline or an API error: keep the last values
         try:
@@ -480,6 +558,8 @@ class App(QObject):
 
     def _shutdown(self):
         self.save_state()
+        for panel in self._panels.values():
+            panel.close()
         if self.tray is not None:
             self.tray.hide()
 
@@ -501,7 +581,166 @@ class App(QObject):
         self.menu.popup(pos)
 
     def _on_tool(self, key):
-        """Water, nutrients, climate, spray, settings and pot actions: wired by a later task."""
+        """Menu entries: the four tools and settings open a panel, the pot entry asks for a model file."""
+        if key == "pot":
+            self.choose_pot()
+        else:
+            self.open_panel(key)
+
+    # ---- panels ---------------------------------------------------------------------------
+
+    def open_panel(self, key: str) -> None:
+        """Show panel `key` (water, nutrients, climate, spray, settings or debug), creating it on first use.
+
+        A new panel is placed beside the overlay window; a panel that already exists keeps its position.
+        """
+        panel = self._panels.get(key)
+        fresh = panel is None
+        if fresh:
+            panel = self._panels[key] = self._create_panel(key)
+        if key == "settings":
+            self._sync_settings()
+        else:
+            self._refresh_panel(key)
+        if fresh:
+            self._place_panel(panel)
+        if panel.isVisible():   # no second fade-in: just bring it forward
+            panel.raise_()
+            panel.activateWindow()
+        else:
+            panel.show_animated()
+
+    def open_debug(self) -> None:
+        self.open_panel("debug")
+
+    def _create_panel(self, key: str) -> tools.GlassPanel:
+        accent = themes.theme(self.state.theme)["accent"]
+        if key == "settings":
+            panel = tools.SettingsPanel(accent)
+            panel.themeChanged.connect(self.set_theme)
+            panel.potChosen.connect(self.set_pot)
+            panel.cityChanged.connect(self.set_city)
+            panel.sizeChanged.connect(self.set_window_size)
+        elif key == "debug":
+            panel = debug_panel.DebugPanel(accent)
+            panel.changed.connect(self._on_debug_changed)
+        else:
+            panel = tools.ToolPanel(key, accent)
+            panel.action.connect(self._on_tool_action)
+        QShortcut(QKeySequence(DEBUG_SHORTCUT), panel).activated.connect(self.open_debug)
+        return panel
+
+    def _place_panel(self, panel: tools.GlassPanel) -> None:
+        g = self.window.geometry()
+        panel.adjustSize()
+        panel.move(place_beside((g.x(), g.y(), g.width(), g.height()), (panel.width(), panel.height()),
+                                _screen_rects(), self._placed))
+        self._placed += 1
+
+    def _refresh_panel(self, key: str) -> None:
+        """Gauges, captions and sliders of one panel from the current state (not the settings fields)."""
+        panel = self._panels.get(key)
+        if panel is None or key == "settings":
+            return
+        st = self.state
+        env = st.env
+        caption = None
+        if key == "water":
+            panel.set_value(env.water)
+        elif key == "nutrients":
+            panel.set_value(env.nutrients)
+        elif key == "spray":
+            panel.set_value(env.humidity)
+            caption = f"실내 습도 {round(env.humidity * 100)}%"
+        elif key == "climate":
+            if not panel.slider.isSliderDown():   # never fight the user's drag
+                panel.set_value((st.controls.heater + 10.0) / 20.0)
+            caption = f"현재 {env.temperature:.1f}°C"
+        elif key == "debug":
+            panel.set_state(st, self.mature_age)
+        if caption is not None and panel.caption_label.text() != caption:
+            panel.set_caption(caption)
+
+    def _refresh_panels(self) -> None:
+        for key, panel in self._panels.items():
+            if panel.isVisible():
+                self._refresh_panel(key)
+
+    def _sync_settings(self) -> None:
+        panel = self._panels.get("settings")
+        if panel is not None:
+            g = self.window.geometry()
+            panel.set_values(self.state.theme, self.state.pot_path, self.state.city, g.width(), g.height())
+
+    def _apply_controls(self) -> None:
+        """Make heater and pinned values count now: a zero-length step recomputes the environment."""
+        sim.step(self.state, self._effective_outdoor(self._elevation), 0.0)
+        self._update_bridge()
+
+    @Slot(str, float)
+    def _on_tool_action(self, name: str, value: float) -> None:
+        st = self.state
+        if name == "water":
+            sim.water(st)
+        elif name == "feed":
+            sim.feed(st)
+        elif name == "spray":
+            sim.spray(st)
+        elif name == "heater":
+            st.controls.heater = _clamp(float(value), -10.0, 10.0)
+        else:
+            return
+        self._apply_controls()
+        self._refresh_panels()
+        if name == "heater":   # a drag sends ~10 updates a second; a skeleton takes ~100 ms, so wait for a pause
+            self._heater_timer.start()
+        else:
+            self.regenerate()
+
+    # ---- debug tool -----------------------------------------------------------------------
+
+    def _on_debug_changed(self, change: dict) -> None:
+        st = self.state
+        if "time_scale" in change:
+            st.controls.time_scale = max(0.0, float(change["time_scale"]))
+        if "age" in change:
+            st.age = max(0.0, float(change["age"]))
+            self.rebuild_meshes()
+        if "growth_percent" in change:
+            st.age = _clamp(float(change["growth_percent"]), 0.0, 100.0) / 100.0 * self.mature_age
+            self.rebuild_meshes()
+        if change.get("reseed"):
+            old = st.seed
+            while st.seed == old:
+                st.seed = random.randrange(1, 2**31)
+            self.regenerate(immediate=True)
+        if "force" in change:
+            for name, value in change["force"].items():
+                if not hasattr(st.env, name):
+                    continue
+                if value is None:
+                    st.controls.forced.pop(name, None)
+                else:
+                    st.controls.forced[name] = float(value)
+            self._apply_controls()
+            self.regenerate()
+        if change.get("reset"):
+            self._reset_plant()
+        self._refresh_panels()
+
+    def _reset_plant(self) -> None:
+        """A fresh plant with first-run age and speed; place, theme, pot and the last weather stay."""
+        old = self.state
+        fresh = sim.PlantState(window=old.window, theme=old.theme, pot_path=old.pot_path, city=old.city,
+                               lat=old.lat, lon=old.lon, outdoor=old.outdoor)
+        fresh.seed = random.randrange(1, 2**31)
+        fresh.age = FIRST_RUN_AGE
+        fresh.controls.time_scale = FIRST_RUN_TIME_SCALE
+        self.state = fresh
+        self._apply_controls()
+        self.regenerate(immediate=True)
+
+    # ---- settings -------------------------------------------------------------------------
 
     def set_theme(self, name: str) -> None:
         if name not in themes.THEMES:
@@ -511,6 +750,62 @@ class App(QObject):
             self._apply_theme()
             self.regenerate()
         self._sync_menu()
+        panel = self._panels.get("settings")   # the menu may have changed it; keep the other fields as typed
+        if panel is not None and panel.theme_combo.currentData() != name:
+            was = panel.theme_combo.blockSignals(True)
+            panel.theme_combo.setCurrentIndex(panel.theme_combo.findData(name))
+            panel.theme_combo.blockSignals(was)
+
+    def choose_pot(self) -> None:
+        """Menu entry "화분 바꾸기…": pick a .glb/.gltf file, then use it."""
+        path = self._ask_pot_file()
+        if path:
+            self.set_pot(path)
+
+    def _ask_pot_file(self) -> str:
+        path, _ = QFileDialog.getOpenFileName(None, "화분 파일 선택", self.state.pot_path, "3D 모델 (*.glb *.gltf)")
+        return path
+
+    def set_pot(self, path: str) -> None:
+        """Use the pot model at `path`; "" or a missing file shows the default pot."""
+        missing = bool(path) and not Path(path).is_file()
+        self.state.pot_path = "" if missing else path
+        self._apply_pot()
+        panel = self._panels.get("settings")
+        if panel is not None:
+            panel.set_pot_path(self.state.pot_path)
+            if missing:
+                panel.set_status(POT_MISSING)
+            elif panel.status_label.text() == POT_MISSING:
+                panel.set_status("")
+
+    def set_city(self, name: str) -> None:
+        """Look the city up in the background; `_on_geocode` applies the answer."""
+        panel = self._panels.get("settings")
+        if panel is not None:
+            panel.set_status("찾는 중…")
+        QThreadPool.globalInstance().start(_GeocodeJob(name, self._geocode_signals))
+
+    @Slot(str, object)
+    def _on_geocode(self, name: str, place):
+        panel = self._panels.get("settings")
+        try:
+            city, lat, lon = str(place["city"]), float(place["lat"]), float(place["lon"])
+        except (TypeError, KeyError, ValueError):
+            if panel is not None:
+                panel.set_status(CITY_MISSING)
+            return
+        st = self.state
+        st.city, st.lat, st.lon = city, lat, lon
+        if panel is not None:
+            panel.set_status(f"위치: {city}")
+        self._update_sky()
+        self.regenerate()
+        self._start_weather_fetch()
+
+    def set_window_size(self, w: int, h: int) -> None:
+        self.window.resize(int(w), int(h))
+        self.state.window = dict(self.state.window, w=int(w), h=int(h))
 
     def set_click_through(self, on: bool) -> None:
         self.click_through = bool(on)

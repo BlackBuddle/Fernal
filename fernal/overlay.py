@@ -16,6 +16,7 @@ log = logging.getLogger(__name__)
 DEFAULT_SCENE = Path(__file__).resolve().parent / "qml" / "Scene.qml"
 DEFAULT_SIZE = (420, 640)
 DRAG_THRESHOLD_PX = 4
+DEBUG_MODIFIERS = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
 
 # Theme keys and their Korean menu labels (kept local on purpose; themes.py is the source of truth
 # for everything else).
@@ -92,6 +93,7 @@ class OverlayWindow(QQuickView):
     orbitRequested = Signal(float, float)  # dx, dy in pixels (Shift+drag)
     zoomRequested = Signal(float)  # wheel delta
     geometryChanged = Signal()
+    debugRequested = Signal()  # Ctrl+Shift+D or Ctrl+Shift+right click
 
     def __init__(self, bridge, geometries, assets_url, source=None):
         # The alpha buffer must be requested before the first window exists.
@@ -162,8 +164,18 @@ class OverlayWindow(QQuickView):
             self._last_global = self._press_global
             self._press_window_pos = self.position()
         elif e.button() == Qt.MouseButton.RightButton:
-            self.menuRequested.emit(e.globalPosition().toPoint())
+            if (e.modifiers() & DEBUG_MODIFIERS) == DEBUG_MODIFIERS:
+                self.debugRequested.emit()
+            else:
+                self.menuRequested.emit(e.globalPosition().toPoint())
         super().mousePressEvent(e)
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key.Key_D and (e.modifiers() & DEBUG_MODIFIERS) == DEBUG_MODIFIERS:
+            self.debugRequested.emit()
+            e.accept()
+            return
+        super().keyPressEvent(e)
 
     def mouseMoveEvent(self, e):
         if self._pressed and not (e.buttons() & Qt.MouseButton.LeftButton):

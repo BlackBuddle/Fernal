@@ -1,7 +1,9 @@
 import pytest
+from PySide6.QtCore import QEvent, QObject, QPointF, Qt, QUrl
+from PySide6.QtGui import QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import QApplication
 
-from fernal.overlay import Bridge, build_menu
+from fernal.overlay import Bridge, OverlayWindow, build_menu
 
 app = QApplication.instance() or QApplication([])
 
@@ -58,3 +60,47 @@ def test_build_menu_keys_and_checked_state():
     _, plain = build_menu(None, "normal", False)
     assert not plain["clickthrough"].isChecked()
     assert plain["theme:normal"].isChecked()
+
+
+@pytest.fixture
+def window(tmp_path):
+    """An OverlayWindow on a trivial scene: key and mouse handling need no 3D content."""
+    qml = tmp_path / "Empty.qml"
+    qml.write_text("import QtQuick\nItem {}\n", encoding="utf-8")
+    geometries = {k: QObject() for k in ("branch", "leaf", "fruit")}
+    win = OverlayWindow(Bridge(), geometries, QUrl(), source=qml)
+    win._keep = geometries
+    return win
+
+
+def _key(key, modifiers):
+    return QKeyEvent(QEvent.Type.KeyPress, key, modifiers)
+
+
+def _right_click(modifiers):
+    pos = QPointF(10, 10)
+    return QMouseEvent(QEvent.Type.MouseButtonPress, pos, pos, Qt.MouseButton.RightButton,
+                       Qt.MouseButton.RightButton, modifiers)
+
+
+def test_debug_shortcut_key_requests_the_panel(window):
+    seen = []
+    window.debugRequested.connect(lambda: seen.append("debug"))
+    both = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+    window.keyPressEvent(_key(Qt.Key.Key_D, both))
+    assert seen == ["debug"]
+    window.keyPressEvent(_key(Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier))   # Ctrl alone: not it
+    window.keyPressEvent(_key(Qt.Key.Key_A, both))
+    assert seen == ["debug"]
+
+
+def test_ctrl_shift_right_click_opens_debug_plain_right_click_opens_menu(window):
+    debug, menu = [], []
+    window.debugRequested.connect(lambda: debug.append(1))
+    window.menuRequested.connect(menu.append)
+    window.mousePressEvent(_right_click(Qt.KeyboardModifier.NoModifier))
+    assert (len(debug), len(menu)) == (0, 1)
+    window.mousePressEvent(_right_click(Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier))
+    assert (len(debug), len(menu)) == (1, 1)
+    window.mousePressEvent(_right_click(Qt.KeyboardModifier.ShiftModifier))
+    assert (len(debug), len(menu)) == (1, 2)
