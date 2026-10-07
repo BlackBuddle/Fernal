@@ -1,6 +1,7 @@
 // Bark: bark.png (grey, sRGB) tints barkColor, bark_normal.png perturbs the normal through a
 // cotangent frame built from screen-space derivatives (the tubes carry no tangents), and the
-// emissive color glows mostly from the cracks (Erdtree).
+// emissive color glows only from the cracks (Erdtree), so the trunk reads as a dark-gold
+// skeleton threaded with ember light rather than a uniformly lit tube.
 
 SHARED_VARS {
     vec3 albedo;    // final base color, read by the light functions
@@ -39,7 +40,8 @@ void MAIN()
         NORMAL = normalize(mat3(t * inv, b * inv, n) * nm);
     }
 
-    EMISSIVE_COLOR = emissiveColor.rgb * emissiveStrength * (0.25 + 1.6 * crack * crack);
+    float ember = smoothstep(0.05, 0.6, crack);
+    EMISSIVE_COLOR = emissiveColor.rgb * emissiveStrength * (0.1 + 1.4 * ember * ember);
 }
 
 void AMBIENT_LIGHT()

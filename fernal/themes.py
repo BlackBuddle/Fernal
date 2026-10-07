@@ -3,18 +3,24 @@
 Keys per theme: label (Korean UI name), bark, bark_emissive, leaf, leaf_emissive,
 leaf_low (leaf color at low vitality), glow, fruit, fruit_color, particles
 ("motes" or "leaf") and accent (UI accent color).
+
+`leaf` is the middle of a three-stop ramp; the dark crown heart and the light outer shell, and the
+autumn colors, live next to it in fernal/qml/Scene.qml (see docs/design/design-plan.md).
 """
 
 THEMES = {
-    "erdtree": dict(label="세계수", bark="#8A6A2E", bark_emissive="#FFD27A", leaf="#F4C35E",
-                    leaf_emissive="#FFA43A", leaf_low="#B8A24A", glow=True, fruit=False,
-                    fruit_color="#D9452B", particles="motes", accent="#E8C06A"),
-    "normal": dict(label="일반 나무", bark="#5A4030", bark_emissive="#000000", leaf="#4F8A3A",
-                   leaf_emissive="#000000", leaf_low="#B8A24A", glow=False, fruit=False,
-                   fruit_color="#D9452B", particles="leaf", accent="#5FA85A"),
-    "fruit": dict(label="열매 나무", bark="#5A4030", bark_emissive="#000000", leaf="#4F8A3A",
-                  leaf_emissive="#000000", leaf_low="#B8A24A", glow=False, fruit=True,
-                  fruit_color="#D9452B", particles="leaf", accent="#E2563A"),
+    # Ember in amber: a dark-gold skeleton, amber leaves, luminous tips.
+    "erdtree": dict(label="세계수", bark="#6A4A1C", bark_emissive="#FFA640", leaf="#CC8A30",
+                    leaf_emissive="#FFB24E", leaf_low="#9A7442", glow=True, fruit=False,
+                    fruit_color="#E0672A", particles="motes", accent="#E2B65C"),
+    # Layered greens from forest shade to spring.
+    "normal": dict(label="일반 나무", bark="#4A372B", bark_emissive="#000000", leaf="#4C7A3A",
+                   leaf_emissive="#000000", leaf_low="#C27A36", glow=False, fruit=False,
+                   fruit_color="#E0672A", particles="leaf", accent="#8FBF7C"),
+    # The same greens with persimmons (감).
+    "fruit": dict(label="열매 나무", bark="#4A372B", bark_emissive="#000000", leaf="#4C7A3A",
+                  leaf_emissive="#000000", leaf_low="#C27A36", glow=False, fruit=True,
+                  fruit_color="#E0672A", particles="leaf", accent="#EC8A4E"),
 }
 
 

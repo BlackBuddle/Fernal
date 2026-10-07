@@ -53,20 +53,69 @@ Item {
     readonly property color keyLow: "#FFB46E"
     readonly property color keyNight: "#8EA8F0"
     readonly property color fillDay: "#DDE7FF"
-    readonly property color fillNight: "#7C92D2"
+    readonly property color fillNight: "#7A88B8"
     readonly property color ambDay: "#4A5058"
-    readonly property color ambNight: "#4E62A0"
+    readonly property color ambNight: "#465478"
     readonly property color rimDay: "#FFF6E6"
     readonly property color rimNight: "#8FB0FF"
     readonly property color sunColor: "#FFC872"
     readonly property color moonColor: "#CFE0FF"
-    readonly property color leafLowColor: "#B08A3E"
-    readonly property color fruitCol: bridge.fruitColor
+    readonly property bool golden: bridge.theme === "erdtree"
+    // Leaf ramp around bridge.leafColor: a dark crown heart and a light outer shell.
+    readonly property color leafDeep: golden ? "#7A4512" : "#1C3520"
+    readonly property color leafFresh: golden ? "#FFD27E" : "#86AE58"
+    // Autumn (low vitality): leaves turn one by one toward gold or rust.
+    readonly property color leafLowColor: golden ? "#9A7442" : "#C27A36"
+    readonly property color autumnRed: golden ? "#6E4526" : "#A8462A"
+    readonly property color loam: "#3B2A1E"
 
     function smoothstep(e0, e1, x) {
         var t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
         return t * t * (3 - 2 * t);
     }
+    // "#RRGGBB" -> linear RGBA, for vertex colors (which bypass the sRGB conversion of color properties).
+    function linearHex(h) {
+        function ch(i) { return Math.pow(parseInt(h.substr(i, 2), 16) / 255, 2.2); }
+        return Qt.vector4d(ch(1), ch(3), ch(5), 1.0);
+    }
+    function samePoint(a, b) { return Math.abs(a[0] - b[0]) < 1e-4 && Math.abs(a[1] - b[1]) < 1e-4; }
+    // Surface of revolution around +y from a profile of [radius, y, "#color"] points, walked from the
+    // axis outward and up, or from the rim inward for a top surface (normals face the walker's left). A repeated point makes a crease (or a color edge).
+    // uvScale > 0 maps uv0 to the xz plane in units of uvScale cm (for the soil); otherwise uv0 wraps.
+    function lathe(prof, seg, uvScale) {
+        var pos = [], nrm = [], uv = [], col = [], idx = [];
+        var n = prof.length, ring = seg + 1, i, j;
+        var arc = [0];
+        for (i = 1; i < n; ++i)
+            arc.push(arc[i - 1] + Math.sqrt(Math.pow(prof[i][0] - prof[i - 1][0], 2)
+                                            + Math.pow(prof[i][1] - prof[i - 1][1], 2)));
+        var total = Math.max(arc[n - 1], 1e-3);
+        for (i = 0; i < n; ++i) {
+            var a = (i > 0 && !samePoint(prof[i - 1], prof[i])) ? prof[i - 1] : prof[i];
+            var b = (i < n - 1 && !samePoint(prof[i + 1], prof[i])) ? prof[i + 1] : prof[i];
+            var dr = b[0] - a[0], dy = b[1] - a[1];
+            var len = Math.sqrt(dr * dr + dy * dy) || 1;
+            var nr = dy / len, ny = -dr / len;
+            var c = linearHex(prof[i][2]);
+            for (j = 0; j <= seg; ++j) {
+                var t = j / seg * 2 * Math.PI, cs = Math.cos(t), sn = Math.sin(t);
+                var x = prof[i][0] * cs, z = prof[i][0] * sn;
+                pos.push(Qt.vector3d(x, prof[i][1], z));
+                nrm.push(Qt.vector3d(nr * cs, ny, nr * sn));
+                uv.push(uvScale > 0 ? Qt.vector2d(x / uvScale, z / uvScale)
+                                    : Qt.vector2d(j / seg * 4, arc[i] / total));
+                col.push(c);
+            }
+        }
+        for (i = 0; i < n - 1; ++i) {
+            for (j = 0; j < seg; ++j) {
+                var p = i * ring + j;
+                idx.push(p, p + ring, p + 1, p + 1, p + ring, p + ring + 1);
+            }
+        }
+        return { positions: pos, normals: nrm, uv0s: uv, colors: col, indexes: idx };
+    }
+
     function mixColor(a, b, t) {
         return Qt.rgba(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t,
                        a.b + (b.b - a.b) * t, 1.0);
@@ -81,7 +130,7 @@ Item {
             backgroundMode: SceneEnvironment.Transparent
             tonemapMode: SceneEnvironment.TonemapModeFilmic
             // Glowing themes already add light through bloom, so they keep a neutral exposure.
-            exposure: (bridge.glowEnabled ? 0.95 : 1.35) * (0.8 + 0.2 * root.dayF)
+            exposure: (bridge.glowEnabled ? 0.9 : 1.2) * (0.8 + 0.2 * root.dayF)
             antialiasingMode: SceneEnvironment.MSAA
             antialiasingQuality: SceneEnvironment.High
             glowEnabled: bridge.glowEnabled
@@ -90,10 +139,12 @@ Item {
             glowBlendMode: ExtendedSceneEnvironment.GlowBlendMode.Additive
             glowLevel: ExtendedSceneEnvironment.GlowLevel.One | ExtendedSceneEnvironment.GlowLevel.Two
                        | ExtendedSceneEnvironment.GlowLevel.Three
-            glowStrength: 1.1
-            glowIntensity: 0.45 + 0.3 * (1.0 - root.dayF)   // stronger halo at night
-            glowBloom: 0.05
-            glowHDRMinimumValue: 0.45 + 0.4 * root.dayF
+            // Restrained: only the luminous tips and bark cracks pass the threshold, so the crown
+            // keeps its shape instead of whiting out.
+            glowStrength: 1.0
+            glowIntensity: 0.32 + 0.25 * (1.0 - root.dayF)   // stronger halo at night
+            glowBloom: 0.02
+            glowHDRMinimumValue: 0.7 + 0.4 * root.dayF
             glowQualityHigh: true
             glowUseBicubicUpscale: true
         }
@@ -201,7 +252,7 @@ Item {
                 property real flutter: 0.0
                 property color barkColor: bridge.barkColor
                 property color emissiveColor: bridge.emissiveColor
-                property real emissiveStrength: 0.28 * (1.0 + 1.8 * (1.0 - root.dayF))   // glows more at night
+                property real emissiveStrength: 0.3 * (1.0 + 1.5 * (1.0 - root.dayF))   // glows more at night
                 property real normalStrength: 1.1
                 property TextureInput barkMap: TextureInput {
                     texture: Texture {
@@ -238,11 +289,16 @@ Item {
                 property real windStrength: bridge.windStrength
                 property real flutter: 1.0
                 property color leafColor: bridge.leafColor
+                property color leafDeep: root.leafDeep
+                property color leafFresh: root.leafFresh
                 property color leafLow: root.leafLowColor
+                property color autumnRed: root.autumnRed
                 property real vitality: bridge.vitality
                 property color leafEmissive: bridge.leafEmissive
-                property real emissiveStrength: 0.2 * (1.0 + 1.0 * (1.0 - root.dayF))   // a dense crown blooms a lot
+                property real emissiveStrength: 0.3 * (1.0 + 0.8 * (1.0 - root.dayF))
                 property real translucency: 0.6
+                property vector3d crownCenter: root.crownCenter
+                property vector3d crownHalf: Qt.vector3d(root.crownW / 2, root.crownH / 2, root.crownW / 2)
                 property TextureInput leafMap: TextureInput {
                     texture: Texture {
                         source: assetsUrl + "leaf.png"
@@ -261,88 +317,124 @@ Item {
             visible: bridge.theme === "fruit"
             castsShadows: true
             receivesShadows: true
-            materials: PrincipledMaterial {
-                baseColor: bridge.fruitColor
-                // A faint self-glow keeps the fruit vivid when the sun is behind the tree.
-                emissiveFactor: Qt.vector3d(root.fruitCol.r * 0.16, root.fruitCol.g * 0.16, root.fruitCol.b * 0.16)
-                roughness: 0.32
-                metalness: 0.0
-                clearcoatAmount: 0.6
-                clearcoatRoughnessAmount: 0.15
+            // Fruits hang from leaves, so they sway with the same wind (no leaf flap).
+            materials: CustomMaterial {
+                shadingMode: CustomMaterial.Shaded
+                vertexShader: "shaders/wind.vert"
+                fragmentShader: "shaders/fruit.frag"
+                property real time: root.time
+                property real windStrength: bridge.windStrength
+                property real flutter: 0.0
+                property color fruitColor: bridge.fruitColor
+                property real glow: 0.07 + 0.08 * (1.0 - root.dayF)   // a faint warmth, more at night
             }
         }
 
         // ---- Pot --------------------------------------------------------------------------
-        // Default: dark ceramic built from #Cylinder (100 tall, 100 wide at scale 1), 54 cm at
-        // the lip, 43 cm tall, soil top at y = 0 where the trunk emerges.
+        // Default: a celadon planter turned on a lathe (ProceduralMesh), 55 cm across the rolled rim,
+        // a raw clay foot, a shallow saucer, and a mulched soil mound. The soil
+        // top is at y = 0 where the trunk emerges. Glaze shading comes from vertex colors: darker
+        // where it pools toward the foot, paler where it breaks over the rim.
         Node {
             id: defaultPot
             visible: !(potLoader.item && potLoader.item.status === RuntimeLoader.Success)
+            readonly property real bottomY: -42.8
 
             PrincipledMaterial {
-                id: glaze
-                baseColor: "#2B2926"
-                roughness: 0.28
+                id: glazeMat
+                baseColor: "white"
+                vertexColorsEnabled: true
+                roughness: 0.5
+                specularAmount: 0.45
                 metalness: 0.0
-                clearcoatAmount: 0.7
-                clearcoatRoughnessAmount: 0.12
-            }
-            PrincipledMaterial {
-                id: lipGlaze
-                baseColor: "#3D3A36"
-                roughness: 0.22
-                clearcoatAmount: 0.8
-                clearcoatRoughnessAmount: 0.08
-            }
-            PrincipledMaterial {
-                id: footGlaze
-                baseColor: "#15161A"
-                roughness: 0.6
+                cullMode: Material.NoCulling
             }
             PrincipledMaterial {
                 id: soilMat
-                baseColor: "#2A1E16"
+                baseColor: root.loam
+                baseColorMap: Texture {
+                    source: assetsUrl + "bark.png"
+                    tilingModeHorizontal: Texture.Repeat
+                    tilingModeVertical: Texture.Repeat
+                    generateMipmaps: true
+                    mipFilter: Texture.Linear
+                }
+                normalMap: Texture {
+                    source: assetsUrl + "bark_normal.png"
+                    tilingModeHorizontal: Texture.Repeat
+                    tilingModeVertical: Texture.Repeat
+                    generateMipmaps: true
+                    mipFilter: Texture.Linear
+                }
+                normalStrength: 0.8
                 roughness: 0.95
+                specularAmount: 0.1
             }
-
-            Model {   // foot ring, slightly recessed
-                source: "#Cylinder"
-                position: Qt.vector3d(0, -41.5, 0)
-                scale: Qt.vector3d(0.40, 0.03, 0.40)
-                materials: footGlaze
+            Model {   // planter
+                castsShadows: true
+                receivesShadows: true
+                materials: glazeMat
+                geometry: ProceduralMesh {
+                    readonly property var m: root.lathe([
+                        [0, -40, "#8A6A52"], [17.5, -40, "#8A6A52"], [17.5, -40, "#8A6A52"],
+                        [18.6, -39.5, "#8A6A52"], [19.1, -38.4, "#8A6A52"], [19.3, -37.2, "#8A6A52"],
+                        [19.3, -37.2, "#5A5F4B"], [19.75, -36.7, "#5A5F4B"], [21.4, -33, "#666A56"],
+                        [23.3, -27, "#707561"], [24.8, -20, "#787D6A"], [25.8, -13, "#7E8370"],
+                        [26.3, -7, "#828674"], [26.4, -3, "#838676"], [26.3, -0.6, "#838676"],
+                        [26.8, 0.3, "#868A79"], [27.4, 1.1, "#8C907E"], [27.7, 2.0, "#969986"],
+                        [27.5, 2.8, "#A2A491"], [27.0, 3.3, "#A2A491"], [26.3, 3.4, "#A2A491"],
+                        [25.6, 3.1, "#969986"], [25.3, 2.4, "#838676"], [25.2, 1.0, "#707561"],
+                        [25.05, -1.6, "#5A5F4B"]
+                    ], 56, 0)
+                    positions: m.positions
+                    normals: m.normals
+                    uv0s: m.uv0s
+                    colors: m.colors
+                    indexes: m.indexes
+                }
             }
-            Model {   // body
-                source: "#Cylinder"
-                position: Qt.vector3d(0, -22.25, 0)
-                scale: Qt.vector3d(0.50, 0.355, 0.50)
-                materials: glaze
+            Model {   // saucer
+                castsShadows: true
+                receivesShadows: true
+                materials: glazeMat
+                geometry: ProceduralMesh {
+                    readonly property var m: root.lathe([
+                        [0, -42.8, "#8A6A52"], [23, -42.8, "#8A6A52"], [23, -42.8, "#8A6A52"],
+                        [24.6, -42.5, "#8A6A52"], [24.6, -42.5, "#565B47"], [27.2, -41.5, "#5E634F"],
+                        [29.6, -40.0, "#666A56"], [30.6, -38.9, "#707561"], [30.7, -38.4, "#8C907E"],
+                        [30.3, -38.1, "#8C907E"], [29.8, -38.3, "#666A56"], [29.2, -38.9, "#5A5F4B"],
+                        [27.4, -39.8, "#505441"], [25, -40.1, "#4B4F3C"], [0, -40.1, "#4B4F3C"]
+                    ], 56, 0)
+                    positions: m.positions
+                    normals: m.normals
+                    uv0s: m.uv0s
+                    colors: m.colors
+                    indexes: m.indexes
+                }
             }
-            Model {   // lower waist band, a hint of taper
-                source: "#Cylinder"
-                position: Qt.vector3d(0, -37.5, 0)
-                scale: Qt.vector3d(0.465, 0.05, 0.465)
-                materials: glaze
-            }
-            Model {   // lip
-                source: "#Cylinder"
-                position: Qt.vector3d(0, -2.5, 0)
-                scale: Qt.vector3d(0.54, 0.04, 0.54)
-                materials: lipGlaze
-            }
-            Model {   // soil, top at y = 0
-                source: "#Cylinder"
-                position: Qt.vector3d(0, -0.75, 0)
-                scale: Qt.vector3d(0.495, 0.015, 0.495)
+            Model {   // soil mound, mulch texture mapped flat from above
+                receivesShadows: true
+                castsShadows: false
                 materials: soilMat
+                geometry: ProceduralMesh {
+                    readonly property var m: root.lathe([
+                        [25.15, -1.5, "#FFFFFF"], [22, -0.7, "#FFFFFF"], [18, -0.1, "#FFFFFF"],
+                        [12, 0.4, "#FFFFFF"], [6, 0.7, "#FFFFFF"], [0, 0.8, "#FFFFFF"]
+                    ], 40, 16)
+                    positions: m.positions
+                    normals: m.normals
+                    uv0s: m.uv0s
+                    indexes: m.indexes
+                }
             }
         }
 
         // Soft contact shadow below whichever pot is shown.
         Model {
             source: "#Rectangle"
-            y: defaultPot.visible ? -43.2 : potLoader.item.bottomY - 0.2
+            y: defaultPot.visible ? defaultPot.bottomY - 0.2 : potLoader.item.bottomY - 0.2
             eulerRotation.x: -90
-            scale: Qt.vector3d(1.05, 1.05, 1)
+            scale: Qt.vector3d(1.12, 1.12, 1)
             castsShadows: false
             receivesShadows: false
             materials: CustomMaterial {
@@ -377,7 +469,7 @@ Item {
         }
 
         // ---- Particles --------------------------------------------------------------------
-        // Erdtree: slowly rising golden motes (screen-blended, about 60 alive).
+        // Erdtree: drifting embers, small and warm, rising slowly (screen-blended, about 50 alive).
         ParticleSystem3D {
             id: moteSystem
             visible: bridge.particlesEnabled && bridge.theme === "erdtree"
@@ -411,8 +503,8 @@ Item {
                     }
                 }
                 maxAmount: 100
-                color: "#FFD27A"
-                colorVariation: Qt.vector4d(0.08, 0.12, 0.1, 0.3)
+                color: "#FFB04A"
+                colorVariation: Qt.vector4d(0.06, 0.16, 0.12, 0.4)
                 blendMode: SpriteParticle3D.Screen
                 billboard: true
                 fadeInDuration: 900
@@ -427,17 +519,17 @@ Item {
                 shape: ParticleShape3D {
                     type: ParticleShape3D.Sphere
                 }
-                emitRate: 12 * root.crownShare
+                emitRate: 10 * root.crownShare
                 emitBursts: [
                     EmitBurst3D {
                         time: 0
-                        amount: Math.round(50 * root.crownShare)
+                        amount: Math.round(40 * root.crownShare)
                     }
                 ]
                 lifeSpan: 5000
-                lifeSpanVariation: 1200
-                particleScale: 3.5
-                particleScaleVariation: 1.5
+                lifeSpanVariation: 1500
+                particleScale: 2.3
+                particleScaleVariation: 1.1
                 velocity: VectorDirection3D {
                     direction: Qt.vector3d(0, 13, 0)
                     directionVariation: Qt.vector3d(5, 5, 5)
@@ -479,11 +571,17 @@ Item {
                             property real windStrength: 0
                             property real flutter: 0
                             property color leafColor: bridge.leafColor
+                            property color leafDeep: root.leafDeep
+                            property color leafFresh: root.leafFresh
                             property color leafLow: root.leafLowColor
-                            property real vitality: Math.min(bridge.vitality, 0.45)
+                            property color autumnRed: root.autumnRed
+                            property real vitality: Math.min(bridge.vitality, 0.3)
                             property color leafEmissive: bridge.leafEmissive
                             property real emissiveStrength: 0.3
                             property real translucency: 0.6
+                            // Far from any crown: a falling leaf is always an outer, lit leaf.
+                            property vector3d crownCenter: Qt.vector3d(0, -1e5, 0)
+                            property vector3d crownHalf: Qt.vector3d(1, 1, 1)
                             property TextureInput leafMap: TextureInput {
                                 texture: Texture {
                                     source: assetsUrl + "leaf.png"

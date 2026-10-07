@@ -17,7 +17,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QAbstractSpinBox, QCheckBox, QDoubleSpinBox, QHBoxLayout, QLabel, QSlider,
                                QWidget)
 
-from .tools import TEXT, TEXT_DIM, GlassPanel, _label, _PillButton, _rgba, ui_font
+from .tools import FIELD_RADIUS, SMALL_PX, TEXT, TEXT_DIM, GlassPanel, _Button, _label, _mix, _rgba, ui_font
 
 DEBUG_WIDTH = 360
 TIME_SCALE_RANGE = (0.1, 1000.0)    # log scale: four decades over the slider
@@ -79,18 +79,18 @@ class _ForceRow(QWidget):
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
-        name_label = _label(label, 12, TEXT_DIM)
+        name_label = _label(label, SMALL_PX, TEXT_DIM)
         name_label.setFixedWidth(44)
         row.addWidget(name_label)
         self.slider = _slider(FORCE_SLIDER_STEPS)
         self.slider.setEnabled(False)
         row.addWidget(self.slider, 1)
-        self.value_label = _label("", 12, TEXT)
+        self.value_label = _label("", SMALL_PX, TEXT)
         self.value_label.setFixedWidth(50)
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         row.addWidget(self.value_label)
         self.check = QCheckBox("고정")
-        self.check.setFont(ui_font(12))
+        self.check.setFont(ui_font(SMALL_PX))
         self.check.setCursor(Qt.CursorShape.PointingHandCursor)
         row.addWidget(self.check)
         self.slider.valueChanged.connect(self._on_slider)
@@ -132,7 +132,7 @@ class DebugPanel(GlassPanel):
 
     changed = Signal(dict)
 
-    def __init__(self, accent: str = "#5FA85A", parent=None):
+    def __init__(self, accent: str = "#8FBF7C", parent=None):
         super().__init__("디버그 도구", accent, parent)
         self.setFixedWidth(DEBUG_WIDTH)
         self._loading = False
@@ -159,7 +159,7 @@ class DebugPanel(GlassPanel):
         self.age_spin.valueChanged.connect(self._on_age)
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
-        row.addWidget(_label("나이", 12, TEXT_DIM))
+        row.addWidget(_label("나이", SMALL_PX, TEXT_DIM))
         row.addStretch(1)
         row.addWidget(self.age_spin)
         self.body.addLayout(row)
@@ -174,7 +174,7 @@ class DebugPanel(GlassPanel):
 
         # pinned environment values
         self.body.addSpacing(16)
-        self.body.addWidget(_label("환경 값 고정", 12, TEXT_DIM))
+        self.body.addWidget(_label("환경 값 고정", SMALL_PX, TEXT_DIM))
         self.body.addSpacing(4)
         self.force_rows: dict[str, _ForceRow] = {}
         for name, label, (lo, hi) in FORCE_FIELDS:
@@ -186,9 +186,9 @@ class DebugPanel(GlassPanel):
 
         # actions
         self.body.addSpacing(14)
-        self.reseed_button = _PillButton("시드 재추첨", self._accent, height=34)
+        self.reseed_button = _Button("시드 재추첨", self._accent)
         self.reseed_button.clicked.connect(lambda: self.changed.emit({"reseed": True}))
-        self.reset_button = _PillButton("초기화", self._accent, primary=False, height=34)
+        self.reset_button = _Button("초기화", self._accent, primary=False)
         self.reset_button.clicked.connect(lambda: self.changed.emit({"reset": True}))
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
@@ -210,12 +210,12 @@ class DebugPanel(GlassPanel):
     # -- building helpers -----------------------------------------------------------------------------------
     def _section(self, text: str, value_label: QLabel) -> None:
         """A dim caption on the left and a live value on the right, above a slider."""
-        value_label.setFont(ui_font(13, QFont.Weight.DemiBold))
+        value_label.setFont(ui_font(13, QFont.Weight.Medium))
         value_label.setStyleSheet(f"color: {_rgba(TEXT)}; background: transparent;")
         value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
-        row.addWidget(_label(text, 12, TEXT_DIM))
+        row.addWidget(_label(text, SMALL_PX, TEXT_DIM))
         row.addStretch(1)
         row.addWidget(value_label)
         self.body.addLayout(row)
@@ -223,39 +223,42 @@ class DebugPanel(GlassPanel):
 
     def _apply_accent(self) -> None:
         a = self._accent
-        accent = _rgba(a.lighter(112), 1.0)
-        dim = _rgba(a, 0.38)
+        accent = _rgba(a, 1.0)
+        dim = _rgba(a, 0.35)
+        focus = _rgba(_mix(a, TEXT, 0.35), 0.95)
         slider_css = f"""
-            QSlider::groove:horizontal {{ height: 6px; border-radius: 3px; background: rgba(255,255,255,0.10); }}
-            QSlider::sub-page:horizontal {{ border-radius: 3px; background: {_rgba(a, 0.85)}; }}
-            QSlider::add-page:horizontal {{ border-radius: 3px; background: transparent; }}
-            QSlider::handle:horizontal {{ width: 12px; height: 12px; margin: -5px 0; border-radius: 8px;
-                background: rgb(242,244,248); border: 2px solid {accent}; }}
+            QSlider::groove:horizontal {{ height: 4px; border-radius: 2px; background: rgba(255,255,255,0.12); }}
+            QSlider::sub-page:horizontal {{ border-radius: 2px; background: {_rgba(a, 0.8)}; }}
+            QSlider::add-page:horizontal {{ border-radius: 2px; background: transparent; }}
+            QSlider::handle:horizontal {{ width: 12px; height: 12px; margin: -4px 0; border-radius: 6px;
+                background: {_rgba(TEXT)}; border: none; }}
             QSlider::handle:horizontal:hover {{ background: white; }}
+            QSlider::handle:horizontal:focus {{ border: 2px solid {focus}; }}
             QSlider::sub-page:horizontal:disabled {{ background: {dim}; }}
-            QSlider::handle:horizontal:disabled {{ background: rgba(255,255,255,0.40);
-                border: 2px solid rgba(255,255,255,0.22); }}
+            QSlider::handle:horizontal:disabled {{ background: rgba(236,238,232,0.38); }}
         """
         sliders = [self.time_slider, self.growth_slider] + [r.slider for r in self.force_rows.values()]
         for s in sliders:
             s.setStyleSheet(slider_css)
         check_css = f"""
-            QCheckBox {{ color: rgba(255,255,255,0.78); spacing: 6px; background: transparent; }}
+            QCheckBox {{ color: {_rgba(TEXT_DIM)}; spacing: 6px; background: transparent; }}
+            QCheckBox:checked {{ color: {_rgba(TEXT)}; }}
             QCheckBox::indicator {{ width: 14px; height: 14px; border-radius: 4px;
-                border: 1px solid rgba(255,255,255,0.30); background: rgba(255,255,255,0.06); }}
-            QCheckBox::indicator:hover {{ border-color: rgba(255,255,255,0.55); }}
+                border: 1px solid rgba(255,255,255,0.28); background: rgba(255,255,255,0.05); }}
+            QCheckBox::indicator:hover {{ border-color: rgba(255,255,255,0.5); }}
+            QCheckBox::indicator:focus {{ border: 1.5px solid {focus}; }}
             QCheckBox::indicator:checked {{ background: {accent}; border-color: {accent}; }}
         """
         for r in self.force_rows.values():
             r.check.setStyleSheet(check_css)
         self.age_spin.setFont(ui_font(13))
         self.age_spin.setStyleSheet(f"""
-            QDoubleSpinBox {{ background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.10);
-                border-radius: 9px; color: rgb(236,238,242); padding: 0 10px; min-height: 30px; max-height: 30px;
-                min-width: 120px; selection-background-color: {_rgba(a, 0.35)}; selection-color: white; }}
-            QDoubleSpinBox:hover {{ background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.16); }}
-            QDoubleSpinBox:focus {{ border: 1px solid {_rgba(a.lighter(115), 0.85)};
-                background: rgba(255,255,255,0.08); }}
+            QDoubleSpinBox {{ background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.10);
+                border-radius: {FIELD_RADIUS:.0f}px; color: {_rgba(TEXT)}; padding: 0 10px; min-height: 30px;
+                max-height: 30px; min-width: 120px; selection-background-color: {_rgba(a, 0.35)};
+                selection-color: white; }}
+            QDoubleSpinBox:hover {{ background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.16); }}
+            QDoubleSpinBox:focus {{ border: 1.5px solid {focus}; background: rgba(255,255,255,0.07); }}
         """)
         for b in (self.reseed_button, self.reset_button):
             b.set_accent(a)

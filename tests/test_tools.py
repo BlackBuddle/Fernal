@@ -82,3 +82,36 @@ def test_accent_and_show_animated_do_not_raise(app):
     for p in panels:
         assert p.windowOpacity() == pytest.approx(1.0)
         p.close()
+
+
+def test_reading_follows_the_comfort_band():
+    from fernal import sim
+    from fernal.tools import comfort_band, reading_for
+    assert comfort_band("water") == sim.OPTIMUM["water"]
+    assert comfort_band("spray") == sim.OPTIMUM["humidity"]
+    assert reading_for("water", 0.1) == "흙이 바싹 말랐어요"
+    assert reading_for("water", 0.35) == "흙이 말라 가요"
+    assert reading_for("water", 0.6) == "흙이 알맞게 촉촉해요"
+    assert reading_for("water", 0.95) == "흙이 너무 젖었어요"
+    assert reading_for("climate", 3) == "난방으로 3°C 올리는 중"
+    assert reading_for("climate", -4) == "냉방으로 4°C 내리는 중"
+    assert reading_for("climate", 0) == "냉난방이 꺼져 있어요"
+
+
+def test_action_button_confirms_in_words_then_returns(app):
+    panel = ToolPanel("water", "#8FBF7C")
+    panel.set_value(0.35)
+    assert panel.reading.text() == "흙이 말라 가요"
+    QTest.mouseClick(panel.button, Qt.MouseButton.LeftButton)
+    assert panel.button.text() == "물을 줬어요"
+    panel.button._restore.timeout.emit()      # skip the 1.6 s wait
+    assert panel.button.text() == "물 주기"
+
+
+def test_theme_choice_keys_switch_the_tree(app):
+    panel = SettingsPanel()
+    got = _record(panel.themeChanged)
+    panel.set_values("normal", "", "서울", 420, 640)
+    QTest.keyClick(panel.theme_combo, Qt.Key.Key_Left)
+    QTest.keyClick(panel.theme_combo, Qt.Key.Key_Right)
+    assert got == [("erdtree",), ("normal",)]

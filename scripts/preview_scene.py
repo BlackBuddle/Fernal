@@ -121,11 +121,11 @@ def parse_age(text, mature_age):
     return float(text)
 
 
-def composite(img):
+def composite(img, backdrop=BACKDROP):
     """Premultiplied 'over' onto the backdrop with saturation (glow may write rgb > alpha)."""
     out = QImage(img.width(), img.height(), QImage.Format_ARGB32_Premultiplied)
     out.setDevicePixelRatio(img.devicePixelRatio())  # draw the grab 1:1 in physical pixels
-    out.fill(QColor(BACKDROP))
+    out.fill(QColor(backdrop))
     p = QPainter(out)
     p.setCompositionMode(QPainter.CompositionMode_DestinationOut)
     p.drawImage(0, 0, img)
@@ -176,7 +176,7 @@ def build_scene_inputs(args):
         light=0.6 if is_day else 0.0,
         affection=0.9 if args.theme == "fruit" else 0.5,
     )
-    vitality = 1.0
+    vitality = float(args.vitality)
     # Phototropism follows the sun only while it is up; at night the plant just grows upward.
     sun_dir = sun_vector(elevation, azimuth) if is_day else (0.0, 1.0, 0.0)
     params = tree.params_from(env, vitality, sun_dir, args.theme)
@@ -221,6 +221,8 @@ def main(argv=None):
     ap.add_argument("--distance", type=float, default=650.0)
     ap.add_argument("--pot", default="", help="optional .glb/.gltf pot file")
     ap.add_argument("--no-particles", action="store_true")
+    ap.add_argument("--vitality", type=float, default=1.0, help="0..1; low values turn leaves autumnal")
+    ap.add_argument("--backdrop", default=BACKDROP, help="backdrop color behind the transparent window")
     ap.add_argument("--scene", default=str(SCENE), help="QML scene file (default: fernal/qml/Scene.qml)")
     args = ap.parse_args(argv)
 
@@ -274,7 +276,7 @@ def main(argv=None):
             return
         corners = [img.pixelColor(x, y).alpha() for x, y in
                    ((0, 0), (img.width() - 1, 0), (0, img.height() - 1), (img.width() - 1, img.height() - 1))]
-        comp = composite(img)
+        comp = composite(img, args.backdrop)
         comp.save(str(out))
         print(f"saved {out} ({img.width()}x{img.height()}, corner alphas {corners})", flush=True)
         if args.twin:
@@ -286,7 +288,7 @@ def main(argv=None):
     def second_grab():
         img = grab()
         if not img.isNull():
-            comp = composite(img)
+            comp = composite(img, args.backdrop)
             comp.save(str(twin_path))
             a, b = pixels(result["first"]), pixels(comp)
             diff = int(np.any(a != b, axis=2).sum())
