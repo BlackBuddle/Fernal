@@ -85,6 +85,7 @@ Environment -> parameters (initial coefficients, adjustable in the hidden tool):
 - Particles (`QtQuick3D.Particles3D`): Erdtree has slowly rising golden motes (additive, ~60). Normal and fruit trees drop an occasional falling leaf. First thing to cut if the schedule slips.
 - Camera: `PerspectiveCamera`, FOV 35, looking slightly up at the plant's center. Wheel zooms, Shift+drag orbits.
 - Lighting: sun/moon `DirectionalLight` (`castsShadow: true`, `shadowMapQuality: High`, soft PCF) + a cool fill from the opposite side + a rim light. Branches, leaves and pot cast and receive shadows. No ground plane.
+- Celestial body (from the user's sketch, top-left "sun moves with time, sun by day, moon by night"): a small soft glowing disc, warm gold sun by day and pale blue-white moon by night, glides along an arc across the top band of the window. Position comes from elevation/azimuth: east/left at sunrise, west/right at sunset, higher at noon; the visible body is the sun while it is above the horizon, else the moon (opposite the sun); it fades near the horizon. No texture, additive glow only.
 - Pot: `RuntimeLoader` loads a user `.glb/.gltf`. Default is a code-built cylinder pot in dark ceramic.
 - Theme table:
 
