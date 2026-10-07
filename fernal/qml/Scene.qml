@@ -21,12 +21,13 @@ Item {
     // Key light fades out around the horizon crossing, where it swaps from sun to moon.
     readonly property real keyFade: smoothstep(-1, 8, bodyEl)
 
-    // Wind clock in seconds; wraps once an hour.
+    // Wind clock in seconds. The gust frequencies in wind.vert (0.9, 2.3, 4.1 rad/s) are all multiples of
+    // 0.1, so a period of 2*pi/0.1 s makes the wrap seamless; only the fast leaf flutter jumps, unseen.
     property real time: 0
     NumberAnimation on time {
         from: 0
-        to: 3600
-        duration: 3600 * 1000
+        to: 62.83185307
+        duration: 62832
         loops: Animation.Infinite
     }
 

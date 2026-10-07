@@ -21,20 +21,25 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--screenshot", metavar="PATH", help="render one frame to PATH (PNG) and exit")
     ap.add_argument("--theme", choices=sorted(themes.THEMES), help="theme of a fresh plant (default: normal)")
     ap.add_argument("--age", type=float, metavar="HOURS",
-                    help="plant age in hours (screenshot default: fully grown; first run: 8)")
+                    help="plant age in hours (screenshot default: fully grown; first run: 48)")
     ap.add_argument("--seed", type=int, metavar="N", help="plant seed (screenshot default: 1; first run: random)")
     ap.add_argument("--hour", type=float, metavar="LOCAL_HOUR",
                     help="screenshot only: local hour of day for the sun, e.g. 14 or 6.5 (default: now)")
-    ap.add_argument("--state", metavar="PATH", help="state file (default: %%APPDATA%%/Fernal/state.json)")
+    ap.add_argument("--state", metavar="PATH",
+                    help="state file for normal runs (default: %%APPDATA%%/Fernal/state.json); --screenshot never "
+                         "reads or writes a state file")
     return ap
 
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    # Render on the GUI thread. OverlayWindow overrides event() in Python, which holds the GIL while Qt
-    # waits for the render thread; that thread needs the GIL to sync PlantGeometry (a Python subclass),
-    # so the threaded loop deadlocks on the first frame. Drop this once overlay.py uses an event filter.
-    os.environ.setdefault("QSG_RENDER_LOOP", "basic")
+    # Render on the GUI thread (the "basic" loop) instead of Qt's default render thread. This is required, not
+    # an optimization, while OverlayWindow overrides event() in Python: with the threaded loop the first frame
+    # never arrives and the process hangs (reproduced; with that override removed the threaded loop works, also
+    # with the Python PlantGeometry subclass). The likely cause is a GIL hand-off between the GUI and render
+    # threads, but it was not traced further. The variable is assigned, not defaulted, so an inherited
+    # QSG_RENDER_LOOP=threaded cannot hang the app. Drop this once overlay.py no longer overrides event().
+    os.environ["QSG_RENDER_LOOP"] = "basic"
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     QCoreApplication.setOrganizationName("")
     QCoreApplication.setApplicationName("Fernal")
@@ -50,4 +55,9 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    rc = main()
+    # The state is already saved. A weather or geocode request still in flight would otherwise keep the
+    # process alive after quit (the thread pool waits for it at exit), so leave right away.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(rc)
