@@ -21,10 +21,10 @@ import numpy as np
 
 _MAX_LATERALS = 3   # laterals a single node can carry
 _LAT_COLS = 6       # angle, azimuth, length, curve, birth, bend
-_MAX_LEAVES = 12    # leaves a single segment can carry
+_MAX_LEAVES = 16    # leaves a single segment can carry
 _LEAF_COLS = 9      # t, phi, 3 jitter values, scale, fruit roll, birth, offset
 _FRUIT_DROP = 3.0   # cm below the leaf
-_FRUIT_SHARE = 0.2  # of fruit_ratio: leaves are many, so only a few carry fruit
+_FRUIT_SHARE = 0.12  # of fruit_ratio: leaves are many, so only a few carry fruit
 _DRAWS = 3 + 1 + _MAX_LATERALS * _LAT_COLS + 1 + _MAX_LEAVES * _LEAF_COLS  # per segment
 _GOLDEN = math.pi * (3.0 - math.sqrt(5.0))  # phyllotaxis angle, ~137.5 deg
 _UP = np.array([0.0, 1.0, 0.0])
@@ -32,14 +32,24 @@ _UP = np.array([0.0, 1.0, 0.0])
 # Per branching order: 0 trunk, 1 limb, 2 branch, 3 twig, 4 twiglet.
 _SEG_CM = (19.0, 16.0, 11.0, 7.0, 5.0)        # target segment length
 _MAX_SEGS = (10, 8, 6, 4, 2)                   # segments per axis (trunk: bole + crown leader)
-_ZONE = (0.28, 0.22, 0.12, 0.10, 1.0)          # where laterals start along the axis
-_LAT_PER_NODE = (0.50, 0.36, 0.32, 0.30, 0.0)  # mean laterals per node per unit branch_factor
+_ZONE = (0.28, 0.12, 0.12, 0.10, 1.0)          # where laterals start along the axis
+_LAT_PER_NODE = (0.50, 0.36, 0.34, 0.32, 0.0)  # mean laterals per node per unit branch_factor
 _CHILD_LEN = (0.0, 0.72, 0.62, 0.45, 0.0)      # lateral length / parent axis length (orders >= 1)
 _BEND = (0.07, 0.10, 0.13, 0.16, 0.18)         # random bend per segment
-_SPEED = (4.0, 3.7, 3.0, 2.4, 2.0)             # growth speed, cm per plant hour
-_LAG = (0.0, 2.0, 1.5, 1.0, 1.0)               # hours a lateral bud waits at its node
+# Growth speed in cm per plant hour. The leader climbs slowly for most of the plant's
+# life while the limbs reach out at a similar pace, so a young tree is a smaller,
+# narrower version of the mature crown rather than its lower half.
+_SPEED = (2.75, 2.45, 2.9, 3.0, 2.6)
+_BOLE_HOURS = 5.0                              # the bare bole shoots up first
+_LAG = (0.0, 0.8, 0.8, 0.5, 0.5)               # hours a lateral bud waits at its node
 _TROPISM = (0.06, 0.10, 0.09, 0.07, 0.07)     # per-segment pull toward the light per unit strength
 _MIN_LEN = 4.0                                 # cm, shorter laterals are not grown
+# Leaves: relative density by rank (0 = finest twigs), on the leader above this axis fraction.
+_LEAF_WEIGHT = (1.0, 0.8, 0.45, 0.25)
+_LEADER_LEAF_WEIGHT = 0.8
+_LEADER_LEAF_FROM = 0.3
+_LEAF_RATE = 2.2    # leaves per cm of twig at full density, before the per-segment rolls
+_LEAF_BUDGET = 4800  # leaves at most; rich, dense trees are thinned evenly (vertex budget)
 
 
 @dataclass
@@ -179,7 +189,7 @@ def generate(seed: int, params: Params) -> Skeleton:
 
     seg_len0 = lead_len * zone0
     segments = [Segment(0, -1, 0, np.zeros(3, np.float32), (d0 * seg_len0).astype(np.float32),
-                        0.0, 0.0, seg_len0 / _SPEED[0])]
+                        0.0, 0.0, _BOLE_HOURS)]
     dirs = [d0]
     axis_of = [0]
     index_of = [0]          # position of the segment within its axis
@@ -230,7 +240,7 @@ def generate(seed: int, params: Params) -> Skeleton:
                     break
                 a_th, a_az, a_len, a_curve, a_birth, a_bend = lat[j]
                 if ax.order == 0:
-                    clen = lead_len * 0.68 * (lr / 0.72) * _crown_shape(r_crown) * (0.8 + 0.4 * a_len)
+                    clen = lead_len * 0.62 * (lr / 0.72) * _crown_shape(r_crown) * (0.8 + 0.4 * a_len)
                     theta = spread * (1.2 + 0.6 * a_th) * (1.0 - 0.35 * r_crown)
                 else:
                     clen = ax.length * _CHILD_LEN[co] * (lr / 0.72) * (1.0 - 0.5 * t_node) * (0.75 + 0.5 * a_len)
@@ -279,7 +289,7 @@ def _assign_radii(segments, axes, axis_of, index_of, base_radius):
     carried[~has_child] = 1.0
     for s in reversed(segments[1:]):
         carried[s.parent] += carried[s.id]
-    pipe = (carried / carried[0]) ** 0.45
+    pipe = (carried / carried[0]) ** 0.42
     for s in segments:
         ax = axes[axis_of[s.id]]
         along = 1.0 - 0.22 * index_of[s.id] / ax.n
@@ -289,32 +299,46 @@ def _assign_radii(segments, axes, axis_of, index_of, base_radius):
 
 
 def _leaves(segments, dirs, axes, axis_of, index_of, leaf_rolls, p, max_order):
-    """Leaf anchors spread along the outer three branching orders."""
+    """Leaf anchors on every side axis and on the upper leader, densest on the finest twigs.
+
+    Leaves follow their segment within a few hours, so a sapling already carries a few on
+    its first shoots. Early leaves are kept small (shade leaves deep in the mature crown);
+    later ones span the full 0.7..1.3 scale.
+    """
     ends = np.array([s.end for s in segments], np.float64)
     outer = [s.id for s in segments if axes[axis_of[s.id]].order >= 1]
     center = ends[outer].mean(axis=0) if outer else ends.mean(axis=0)
     center[1] = ends[outer, 1].mean() if outer else center[1]
     density = _clamp(p.leaf_density, 0.0, 1.0)
-    offset = 3.2 * _clamp(p.leaf_size, 0.3, 2.0)
-    low = max(1, max_order - 2)
+    offset = 4.2 * _clamp(p.leaf_size, 0.3, 2.0)
+    late = max(1.0, max(s.birth_age + s.grow_hours for s in segments))
 
-    parts = []
+    plan = []
     for s in segments:
         ax = axes[axis_of[s.id]]
-        if ax.order < low:
-            continue
-        n_u, block = leaf_rolls[s.id]
+        if s.id == 0:
+            continue                          # the bare bole
+        n_u = leaf_rolls[s.id][0]
         t_axis = _node_t(ax, index_of[s.id])
-        rank = max_order - ax.order          # 0 for the finest twigs
-        weight = (1.0, 0.55, 0.25)[rank]
-        if rank == 2 and t_axis < 0.5:
-            continue
-        if n_u < 0.12:
+        if ax.order == 0:
+            if t_axis < _LEADER_LEAF_FROM:
+                continue
+            weight = _LEADER_LEAF_WEIGHT
+        else:
+            weight = _LEAF_WEIGHT[min(3, max_order - ax.order)]
+        if n_u < 0.08:
             continue                          # a bare stretch lets the branches show
         seg_len = float(np.linalg.norm(s.end - s.start))
-        expected = 1.05 * density * weight * seg_len * (0.55 + 0.9 * t_axis) * (0.4 + 1.2 * n_u)
+        expected = _LEAF_RATE * density * weight * seg_len * (0.55 + 0.9 * t_axis) * (0.45 + 1.1 * n_u)
+        plan.append((s, expected / 3.0))
+    total = sum(min(_MAX_LEAVES, e) for _, e in plan)
+    thin = min(1.0, _LEAF_BUDGET / total) if total > 0 else 1.0
+
+    parts = []
+    for s, expected in plan:
+        n_u, block = leaf_rolls[s.id]
         dither = (n_u * 7.31) % 1.0             # spreads rounding so sparse trees keep some leaves
-        n = min(_MAX_LEAVES, int(expected / 3.0 + dither))
+        n = min(_MAX_LEAVES, int(expected * thin + dither))
         if n == 0:
             continue
         b = block[:n]
@@ -329,8 +353,10 @@ def _leaves(segments, dirs, axes, axis_of, index_of, leaf_rolls, p, max_order):
         out /= np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-6)
         ldir = 0.55 * perp + 0.5 * out + 0.3 * _UP + 0.45 * (b[:, 2:5] * 2.0 - 1.0)
         ldir /= np.maximum(np.linalg.norm(ldir, axis=1, keepdims=True), 1e-6)
-        birth = s.birth_age + s.grow_hours * (0.85 + 0.15 * b[:, 0]) + 1.0 + 2.5 * b[:, 7]
-        scale = 0.7 + 0.6 * b[:, 5]
+        birth = s.birth_age + s.grow_hours * (0.6 + 0.4 * b[:, 0]) + 0.3 + 1.5 * b[:, 7]
+        # Leaves born early stay small; the spread opens up as the plant matures.
+        span = 0.25 + 0.75 * np.clip((birth - 0.1 * late) / (0.55 * late), 0.0, 1.0)
+        scale = 0.7 + 0.6 * b[:, 5] * span
         parts.append((pos, ldir, birth, scale, b[:, 6]))
 
     if not parts:

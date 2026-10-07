@@ -104,9 +104,10 @@ def test_branch_tip_growth_radius_and_sway():
         block = uv1[12 * i:12 * (i + 1)]
         assert np.allclose(block[:, 0], (s.id * 0.618) % 1.0, atol=1e-6)
         assert np.allclose(block[:, 1], s.depth / 2.0, atol=1e-6)  # deepest segment has depth 2
-    half = mesh.branch_arrays(skel, 12.0)  # trunk growth = 0.5
+    half = mesh.branch_arrays(skel, 12.0)  # trunk growth = 0.5, nothing above it born yet
     assert half[0][6:12, 1] == pytest.approx(50.0, abs=1e-3)
-    assert np.linalg.norm(half[0][:6] - half[0][:6].mean(axis=0), axis=1) == pytest.approx(3.0, abs=1e-4)
+    girth = (0.5 / 3.0) ** mesh.THICKEN_POWER  # grown share of the trunk's 3-segment subtree
+    assert np.linalg.norm(half[0][:6] - half[0][:6].mean(axis=0), axis=1) == pytest.approx(6.0 * girth * 0.5, abs=1e-4)
 
 
 def test_tube_winding_faces_outward():
@@ -130,9 +131,11 @@ def test_leaf_quad_size_scales_with_growth():
         return np.linalg.norm(pos[1] - pos[0]), np.linalg.norm(pos[3] - pos[0])
 
     full_age = 10.0 + mesh.LEAF_GROW_HOURS
-    assert edge(full_age, 1.0) == pytest.approx((8.0 * 1.2,) * 2, rel=1e-4)
-    assert edge(full_age, 1.5) == pytest.approx((8.0 * 1.5 * 1.2,) * 2, rel=1e-4)
-    assert edge(10.0 + 0.5 * mesh.LEAF_GROW_HOURS, 1.0) == pytest.approx((8.0 * 1.2 * 0.5,) * 2, rel=1e-4)
+    cm = mesh.LEAF_SIZE_CM
+    assert 12.0 <= cm <= 16.0
+    assert edge(full_age, 1.0) == pytest.approx((cm * 1.2,) * 2, rel=1e-4)
+    assert edge(full_age, 1.5) == pytest.approx((cm * 1.5 * 1.2,) * 2, rel=1e-4)
+    assert edge(10.0 + 0.5 * mesh.LEAF_GROW_HOURS, 1.0) == pytest.approx((cm * 1.2 * 0.5,) * 2, rel=1e-4)
     assert len(mesh.leaf_arrays(one, 10.0, 1.0)[0]) == 0  # not born yet
 
     arrays = mesh.leaf_arrays(one, full_age, 1.0)
@@ -237,7 +240,38 @@ def test_tube_tip_joins_thickest_child_base():
         return np.hypot(pos[:, 0], pos[:, 2])
 
     unborn = ring_radii(15.0)  # child not born yet: the parent tip keeps the plain 0.7 taper
-    assert unborn[6:12] == pytest.approx(4.0 * mesh.TIP_RADIUS, abs=1e-4)
+    girth = 0.5 ** mesh.THICKEN_POWER  # half of the parent's subtree has grown
+    assert unborn[6:12] == pytest.approx(4.0 * girth * mesh.TIP_RADIUS, abs=1e-4)
     grown = ring_radii(100.0)  # both fully grown: parent tip ring == child base ring
     assert grown[6:12] == pytest.approx(3.6, abs=1e-4)
     assert grown[12:18] == pytest.approx(3.6, abs=1e-4)
+
+
+def test_secondary_growth_thickens_with_the_crown():
+    # A trunk with two limbs and a twig on each: the trunk is slender while only it has grown,
+    # thickens as the crown grows, reaches its full radius at maturity, and a child is never
+    # thicker than its parent at any age.
+    segs = [
+        seg(0, -1, 0, (0, 0, 0), (0, 100, 0), radius=6.0, birth=0.0, hours=10.0),
+        seg(1, 0, 1, (0, 100, 0), (40, 140, 0), radius=4.0, birth=10.0, hours=10.0),
+        seg(2, 0, 1, (0, 100, 0), (-40, 140, 0), radius=4.0, birth=10.0, hours=10.0),
+        seg(3, 1, 2, (40, 140, 0), (60, 170, 0), radius=2.0, birth=20.0, hours=10.0),
+        seg(4, 2, 2, (-40, 140, 0), (-60, 170, 0), radius=2.0, birth=20.0, hours=10.0),
+    ]
+    skel = SimpleNamespace(segments=segs)
+
+    def base_radius(age, i):
+        pos = mesh.branch_arrays(skel, age)[0].astype(np.float64)
+        ring = pos[12 * i:12 * i + 6]
+        return float(np.linalg.norm(ring - ring.mean(axis=0), axis=1).mean())
+
+    young, mid, old = (base_radius(age, 0) for age in (10.0, 20.0, 100.0))
+    assert young == pytest.approx(6.0 * 0.2 ** mesh.THICKEN_POWER, abs=1e-4)  # 1 of 5 grown
+    assert young < mid < old
+    assert old == pytest.approx(6.0, abs=1e-4)
+    for age in (12.0, 18.0, 24.0, 100.0):
+        pos = mesh.branch_arrays(skel, age)[0].astype(np.float64)
+        radii = [np.linalg.norm(pos[12 * i:12 * i + 6] - pos[12 * i:12 * i + 6].mean(axis=0), axis=1).mean()
+                 for i in range(len(pos) // 12)]
+        for i in range(1, len(radii)):
+            assert radii[i] <= radii[segs[i].parent] + 1e-6

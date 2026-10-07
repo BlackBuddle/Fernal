@@ -6,8 +6,8 @@ leaf_low (leaf color at low vitality), glow, fruit, fruit_color, particles
 """
 
 THEMES = {
-    "erdtree": dict(label="세계수", bark="#8A6A2E", bark_emissive="#FFD27A", leaf="#FFD27A",
-                    leaf_emissive="#FFB347", leaf_low="#B8A24A", glow=True, fruit=False,
+    "erdtree": dict(label="세계수", bark="#8A6A2E", bark_emissive="#FFD27A", leaf="#F4C35E",
+                    leaf_emissive="#FFA43A", leaf_low="#B8A24A", glow=True, fruit=False,
                     fruit_color="#D9452B", particles="motes", accent="#E8C06A"),
     "normal": dict(label="일반 나무", bark="#5A4030", bark_emissive="#000000", leaf="#4F8A3A",
                    leaf_emissive="#000000", leaf_low="#B8A24A", glow=False, fruit=False,

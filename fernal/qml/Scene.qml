@@ -30,10 +30,23 @@ Item {
         loops: Animation.Infinite
     }
 
-    // Camera framing: bridge distance 650 is the default framing of a mature ~300 cm tree
-    // plus pot in a 420x640 window; the internal factor leaves room for the sky band.
-    readonly property real distScale: 1.62
-    readonly property real focusY: 215
+    // Camera framing: bridge distance 650 is the default framing of a mature ~300-340 cm tree
+    // plus pot in a 420x640 window. The tree fills the lower ~75 % of the window and the top
+    // band stays free for the sun or moon arc.
+    readonly property real distScale: 1.24
+    readonly property real focusY: 200
+
+    // Crown box from the leaf mesh bounds, so particles follow the tree as it grows.
+    readonly property vector3d crownMin: leaves.bounds.minimum
+    readonly property vector3d crownMax: leaves.bounds.maximum
+    readonly property bool hasCrown: crownMax.y - crownMin.y > 1
+    readonly property vector3d crownCenter: Qt.vector3d((crownMin.x + crownMax.x) / 2,
+                                                        (crownMin.y + crownMax.y) / 2,
+                                                        (crownMin.z + crownMax.z) / 2)
+    // Emitter scale: a unit ParticleShape3D sphere is 100 cm across.
+    readonly property real crownW: Math.max(20, Math.max(crownMax.x - crownMin.x, crownMax.z - crownMin.z))
+    readonly property real crownH: Math.max(20, crownMax.y - crownMin.y)
+    readonly property real crownShare: Math.max(0.15, Math.min(1, crownW / 260))
 
     // Palette
     readonly property color keyDay: "#FFF1DC"
@@ -78,9 +91,9 @@ Item {
             glowLevel: ExtendedSceneEnvironment.GlowLevel.One | ExtendedSceneEnvironment.GlowLevel.Two
                        | ExtendedSceneEnvironment.GlowLevel.Three
             glowStrength: 1.1
-            glowIntensity: 0.5 + 0.45 * (1.0 - root.dayF)   // stronger halo at night
+            glowIntensity: 0.45 + 0.3 * (1.0 - root.dayF)   // stronger halo at night
             glowBloom: 0.05
-            glowHDRMinimumValue: 0.45 + 0.25 * root.dayF
+            glowHDRMinimumValue: 0.45 + 0.4 * root.dayF
             glowQualityHigh: true
             glowUseBicubicUpscale: true
         }
@@ -228,7 +241,7 @@ Item {
                 property color leafLow: root.leafLowColor
                 property real vitality: bridge.vitality
                 property color leafEmissive: bridge.leafEmissive
-                property real emissiveStrength: 0.32 * (1.0 + 1.6 * (1.0 - root.dayF))
+                property real emissiveStrength: 0.2 * (1.0 + 1.0 * (1.0 - root.dayF))   // a dense crown blooms a lot
                 property real translucency: 0.6
                 property TextureInput leafMap: TextureInput {
                     texture: Texture {
@@ -408,16 +421,17 @@ Item {
 
             ParticleEmitter3D {
                 particle: mote
-                position: Qt.vector3d(0, 175, 0)
-                scale: Qt.vector3d(2.8, 1.5, 2.8)
+                enabled: root.hasCrown
+                position: root.crownCenter
+                scale: Qt.vector3d(root.crownW / 100, root.crownH / 160, root.crownW / 100)
                 shape: ParticleShape3D {
                     type: ParticleShape3D.Sphere
                 }
-                emitRate: 12
+                emitRate: 12 * root.crownShare
                 emitBursts: [
                     EmitBurst3D {
                         time: 0
-                        amount: 50
+                        amount: Math.round(50 * root.crownShare)
                     }
                 ]
                 lifeSpan: 5000
@@ -484,12 +498,13 @@ Item {
 
             ParticleEmitter3D {
                 particle: fallingLeaf
-                position: Qt.vector3d(0, 215, 0)
-                scale: Qt.vector3d(2.4, 0.8, 2.4)
+                enabled: root.hasCrown
+                position: Qt.vector3d(root.crownCenter.x, root.crownCenter.y + 0.15 * root.crownH, root.crownCenter.z)
+                scale: Qt.vector3d(root.crownW / 115, root.crownH / 250, root.crownW / 115)
                 shape: ParticleShape3D {
                     type: ParticleShape3D.Sphere
                 }
-                emitRate: 0.22
+                emitRate: 0.22 * root.crownShare
                 emitBursts: [
                     EmitBurst3D {
                         time: 0

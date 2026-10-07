@@ -166,8 +166,8 @@ def test_leaf_density_and_fruit_keep_geometry():
     for name in ("leaf_pos", "leaf_dir", "leaf_birth", "leaf_scale"):
         assert np.array_equal(getattr(fruity, name), getattr(base, name))
     n_leaves, n_fruit = len(fruity.leaf_pos), len(fruity.fruit_pos)
-    # Leaves are many, so only fruit_ratio * 0.2 of them carry a fruit.
-    assert 0.03 * n_leaves < n_fruit < 0.09 * n_leaves
+    # Leaves are many, so only fruit_ratio * 0.12 of them carry a fruit.
+    assert 0.018 * n_leaves < n_fruit < 0.055 * n_leaves
     below = {tuple(x) for x in fruity.fruit_pos + np.float32([0, 3, 0])}
     assert below <= {tuple(x) for x in fruity.leaf_pos}
     assert len(fruity.fruit_birth) == n_fruit
@@ -219,3 +219,24 @@ def test_height_and_schedule_in_range():
         assert 200.0 <= height(skel) <= 380.0
         assert 50.0 <= full <= 130.0
         assert skel.leaf_birth.max() <= 130.0 + 2.0
+
+
+def test_leaves_follow_growth_and_fill_the_crown():
+    for seed in (1, 3, 7):
+        skel = generate(seed, default_params())
+        full = max(s.birth_age + s.grow_hours for s in skel.segments)
+        n = len(skel.leaf_birth)
+        assert 2500 <= n <= 4000  # a full crown at maturity
+        young = int((skel.leaf_birth < 0.2 * full).sum())
+        assert 5 <= young <= 0.05 * n  # a sapling already carries a few leaves
+        counts = [int((skel.leaf_birth < f * full).sum()) for f in (0.2, 0.35, 0.5, 0.75, 1.0)]
+        assert counts == sorted(counts) and counts[2] < 0.5 * n
+        early = skel.leaf_scale[skel.leaf_birth < 0.3 * full]
+        late = skel.leaf_scale[skel.leaf_birth > 0.7 * full]
+        assert early.mean() < late.mean()  # early leaves stay small
+
+
+def test_leaf_count_has_a_budget():
+    rich = generate(5, Params(branch_factor=3.5, max_depth=7, leaf_density=1.0))
+    assert len(rich.segments) == 1500
+    assert 3500 <= len(rich.leaf_pos) <= 4900

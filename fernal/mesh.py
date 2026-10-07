@@ -20,8 +20,10 @@ STRIDE = 40  # position(3) normal(3) uv0(2) uv1(2) as float32
 SIDES = 6  # vertices per tube ring
 TIP_RADIUS = 0.7  # tube radius at the tip, relative to the base
 V_TILE_CM = 20.0  # bark texture repeats every 20 cm along a branch
-LEAF_SIZE_CM = 8.0  # edge length of a fully grown leaf with size 1 and leaf_scale 1
-LEAF_GROW_HOURS = 2.0  # plant hours a leaf needs to unfurl after its birth
+LEAF_SIZE_CM = 13.0  # edge length of a fully grown leaf with size 1 and leaf_scale 1
+LEAF_GROW_HOURS = 5.0  # plant hours a leaf needs to unfurl after its birth
+THICKEN_POWER = 0.45  # pipe-model exponent of the secondary (girth) growth
+THICKEN_FLOOR = 0.3  # girth of a fresh shoot relative to its final radius
 FRUIT_GROW_HOURS = 2.0  # plant hours a fruit needs to swell after its birth
 _LEAF_SEED = 7001
 _FRUIT_SEED = 7002
@@ -96,8 +98,31 @@ def _tip_radius(parent, radius, g):
     return np.maximum(blend, 0.05 * radius)
 
 
+def _girth(parent, depth, radius, g):
+    """Radius at the current age: final radius * (grown share of the subtree) ** power.
+
+    Secondary growth: a segment thickens as the shoots it carries grow, so a sapling's
+    trunk is slender and reaches its final girth only when the whole crown has grown.
+    A child is never thicker than its parent.
+    """
+    levels = [np.flatnonzero((depth == lvl) & (parent >= 0)) for lvl in np.unique(depth)[1:]]
+    grown, total = g.copy(), np.ones(len(radius))
+    for rows in reversed(levels):  # deepest level first, so each subtree is summed once
+        np.add.at(grown, parent[rows], grown[rows])
+        np.add.at(total, parent[rows], total[rows])
+    share = np.clip(grown / total, 0.0, 1.0) ** THICKEN_POWER
+    r = radius * np.maximum(share, THICKEN_FLOOR)
+    for rows in levels:
+        r[rows] = np.minimum(r[rows], r[parent[rows]])
+    return r
+
+
 def branch_arrays(skel, age: float):
-    """A 6-sided tube per segment with growth > 0; length and radius scale with growth."""
+    """A 6-sided tube per segment with growth > 0; length and radius scale with growth.
+
+    Radii also follow secondary growth (see ``_girth``): they reach the skeleton's radius
+    once everything a segment carries has grown.
+    """
     segs = skel.segments
     if not segs:
         return _empty()
@@ -106,6 +131,7 @@ def branch_arrays(skel, age: float):
     parent = np.array([s.parent for s in segs], np.int64)
     max_depth = max(1.0, depth.max())
     g = growth(age, birth, hours)
+    radius = _girth(parent, depth, radius, g)
     tip_r = _tip_radius(parent, radius, g)
     vis = g > 0.0
     count = int(vis.sum())
@@ -143,7 +169,7 @@ def branch_arrays(skel, age: float):
 
 
 def leaf_arrays(skel, age: float, size: float):
-    """One quad per born leaf, 8 cm * size * leaf_scale * growth, normal = leaf_dir."""
+    """One quad per born leaf, LEAF_SIZE_CM * size * leaf_scale * growth, normal = leaf_dir."""
     leaf_pos = np.asarray(skel.leaf_pos, np.float64).reshape(-1, 3)
     total = len(leaf_pos)
     if total == 0:
