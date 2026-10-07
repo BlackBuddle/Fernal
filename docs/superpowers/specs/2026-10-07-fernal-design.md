@@ -90,7 +90,7 @@ Environment -> parameters (initial coefficients, adjustable in the hidden tool):
 
 | Theme | Branches | Leaves | Extras |
 |---|---|---|---|
-| `erdtree` | gold bark `#8A6A2E`, emissive `#FFD27A` | translucent gold emissive leaves | `ExtendedSceneEnvironment.glowEnabled`, `glowBloom 0.5`, golden motes. If glow cannot coexist with the transparent window, fall back to emissive materials + a light billboard |
+| `erdtree` | gold bark `#8A6A2E`, emissive `#FFD27A` | translucent gold emissive leaves | `ExtendedSceneEnvironment.glowEnabled`, `glowBloom 0.5`, golden motes. Verified in the T0 spike on D3D11: glow coexists with the transparent window (use `glowBlendMode: Additive`, `glowLevel: One|Two|Three`; keep lit surfaces dark or lower `glowBloom` to avoid white-out), so no emissive-billboard fallback is needed |
 | `normal` | bark `#5A4030` | green `#4F8A3A`, blending to `#B8A24A` as vitality drops | falling leaf |
 | `fruit` | same as normal | same as normal | fruit spheres `#D9452B`, count scales with affection |
 

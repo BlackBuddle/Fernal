@@ -128,7 +128,7 @@ Dynamics inside `step` (h = dt_seconds / 3600, all values clamped to range):
 - `state.age += h * controls.time_scale * growth_rate(env, vitality)`
 
 ```python
-# fernal/tree.py  (numpy only; imports Env from sim for typing)
+# fernal/tree.py  (numpy only; env is duck-typed, do NOT import sim)
 import numpy as np
 from dataclasses import dataclass
 
@@ -206,10 +206,11 @@ def theme(name: str) -> dict: ...   # unknown name -> THEMES["normal"]
 ```
 
 ```python
-# fernal/sky.py  (stdlib only; returns sim.Outdoor)
+# fernal/sky.py  (stdlib only; does NOT import sim)
 def sun_position(lat: float, lon: float, when: datetime) -> tuple[float, float]: ...  # (elevation_deg, azimuth_deg), `when` tz-aware
 def day_factor(elevation_deg: float) -> float: ...     # linear 0..1 over -6..+6
-def fetch_weather(lat: float, lon: float, timeout: float = 5.0) -> "Outdoor | None": ...
+def fetch_weather(lat: float, lon: float, timeout: float = 5.0) -> "dict | None": ...
+    # {"temperature": degC, "humidity": 0..1, "radiation": 0..1 (shortwave W/m2 / 800, clamped)}; App builds sim.Outdoor(**w)
 def geocode(name: str, timeout: float = 5.0) -> "dict | None": ...   # {"city": str, "lat": float, "lon": float}
 ```
 
@@ -320,7 +321,7 @@ Screenshot CLI (`python -m fernal --screenshot PATH [--theme T] [--age H] [--see
 
 - [ ] NOAA solar position approximation (declination, equation of time, hour angle) with stdlib `math` and `datetime`.
 - [ ] `fetch_weather` calls `https://api.open-meteo.com/v1/forecast?latitude=..&longitude=..&current=temperature_2m,relative_humidity_2m,shortwave_radiation` with `urllib.request` and the timeout; any exception returns `None`. `geocode` uses `https://geocoding-api.open-meteo.com/v1/search?name=..&count=1&language=ko`.
-- [ ] Tests: `test_noon_is_max_elevation` (Seoul, 2026-06-21, compare 12:30 KST against 06:00 and 18:00), `test_night_elevation_negative`, `test_day_factor_bounds`, `test_fetch_weather_failure_returns_none` (monkeypatch `urllib.request.urlopen` to raise), `test_fetch_weather_parses` (monkeypatch to return a canned JSON body).
+- [ ] Tests: `test_noon_is_max_elevation` (Seoul, 2026-06-21, compare 12:30 KST against 06:00 and 18:00), `test_night_elevation_negative`, `test_day_factor_bounds`, `test_fetch_weather_failure_returns_none` (monkeypatch `urllib.request.urlopen` to raise), `test_fetch_weather_parses` (monkeypatch to return a canned JSON body with temperature_2m=21.5, relative_humidity_2m=60, shortwave_radiation=400; assert the result equals {"temperature": 21.5, "humidity": 0.6, "radiation": 0.5}).
 - [ ] `pytest tests/test_sky.py -q` passes. Commit `feat(sky): sun position and Open-Meteo`.
 
 ### T4: Mesh builders and geometry — Sonnet, 1.5 h
@@ -337,7 +338,7 @@ Screenshot CLI (`python -m fernal --screenshot PATH [--theme T] [--age H] [--see
 
 **Files:** `scripts/make_textures.py`, `fernal/assets/bark.png`, `fernal/assets/bark_normal.png`, `fernal/assets/leaf.png`, `fernal/assets/tray.png`
 
-- [ ] `bark.png` 512x512 tileable: layered value noise stretched vertically (fiber), warm brown palette with darker crevices, subtle color variation. `bark_normal.png` from the same height field (Sobel, strength tuned so ridges read at 1 m camera distance).
+- [ ] `bark.png` 512x512 tileable: layered value noise stretched vertically (fiber), a near-neutral light tint map (values about 0.55..1.0, faint warm tint) so the theme's bark color multiplies it; darker crevices and ridges carry the structure. `bark_normal.png` from the same height field (Sobel, strength tuned so ridges read at 1 m camera distance).
 - [ ] `leaf.png` 256x256 RGBA: elegant leaf silhouette (pointed tip, slight asymmetry), alpha outline anti-aliased, midrib and side veins darker, lighter edge. Color is near-white so the material tints it.
 - [ ] `tray.png` 64x64: simple leaf glyph, transparent background, readable at 16 px.
 - [ ] Script is deterministic (fixed seed) and re-runnable. Commit `feat(assets): procedural bark and leaf textures`.
@@ -351,6 +352,7 @@ Screenshot CLI (`python -m fernal --screenshot PATH [--theme T] [--age H] [--see
 **Files:** `fernal/themes.py`, `fernal/qml/Scene.qml`, `fernal/qml/shaders/wind.vert`, `fernal/qml/shaders/bark.frag`, `fernal/qml/shaders/leaf.frag`, `scripts/preview_scene.py` (throwaway harness), `docs/screenshots/scene_<theme>_<day|night>.png`
 **Interfaces:** consumes `PlantGeometry` (T4), context properties and `Bridge` property names (contracts), `tree.generate` + `params_from` (T1). Produces `Scene.qml` bound only to those names and `themes.THEMES`.
 
+- [ ] Apply the spike findings (`docs/superpowers/notes/spike.md`, verified on the real screen, D3D11): glow coexists with the transparent window; use `glowBlendMode: Additive` and `glowLevel: One|Two|Three` (Qt defaults SoftLight/One show no halo); `glowBloom 0.5` white-outs lit surfaces, so keep materials dark or lower the bloom; particles need `particleScale` about 0.3 and an `EmitBurst3D` at t=0 because the first frame arrives about 1 s after show(); the display DPR can be 1.5 (grabs are 1.5x larger).
 - [ ] `Scene.qml`: `View3D` with `ExtendedSceneEnvironment` (transparent background, MSAA High, `glowEnabled: bridge.glowEnabled`, `glowBloom: 0.5`, glow strength tuned), camera on an orbit `Node` driven by `bridge.cameraYaw/cameraPitch/cameraDistance` (defaults 0, 8, 650) framing a 300 cm tall plant from slightly below (FOV 35), sun `DirectionalLight` whose rotation follows `bridge.sunElevation/sunAzimuth`, color and brightness blended by `bridge.dayFactor` (warm 1.0 by day, blue 0.25 at night), `castsShadow: true`, `shadowMapQuality: High`, soft PCF, plus a cool fill and a rim light.
 - [ ] Models: branches (`CustomMaterial`, Shaded, `wind.vert` + `bark.frag` with `bark.png` albedo and `bark_normal.png` normal, emissive from `bridge.emissiveColor`), leaves (`CustomMaterial`, `NoCulling`, `leaf.frag` with alpha discard from `leaf.png`, base color blends `bridge.leafColor` by `bridge.vitality`), fruits (`PrincipledMaterial`, `bridge.fruitColor`, visible only when the theme has fruit).
 - [ ] `wind.vert`: `VERTEX += sway(UV1.x phase, UV1.y weight, time uniform, windStrength uniform)` using two summed sines, amplitude 2 cm max. `time` is a `property real` driven by a looping `NumberAnimation` in QML.
@@ -379,7 +381,7 @@ Screenshot CLI (`python -m fernal --screenshot PATH [--theme T] [--age H] [--see
 
 - [ ] `__main__`: argparse (`--screenshot`, `--theme`, `--age`, `--seed`, `--hour`), `QApplication`, `App(args).run()`.
 - [ ] `App.__init__`: load state (`sim.load`), clamp window geometry to available screens, `catch_up` with the last `Outdoor` (stored in state file under key `outdoor`), create `Bridge`, three `PlantGeometry`, `OverlayWindow`, menu + `Tray`, connect signals (hover/click -> `sim.touch`; `orbitRequested` -> `cameraYaw += dx*0.4`, `cameraPitch -= dy*0.3` clamped; `zoomRequested` -> `cameraDistance` clamped 300..1200; menu actions -> no-ops for tools until T9, theme/click-through/quit wired now).
-- [ ] Timers: 1 s tick (`sim.step`, sun update via `sky.sun_position`, bridge day factor and sun angles, `regenerate` if `params_from` output changed, else `rebuild_meshes` at 10 Hz while any segment still grows), 60 s save, 1 h weather fetch on a `QThreadPool` runnable (result applied on the main thread), fetched once at startup.
+- [ ] Timers: 1 s tick (`sim.step`, sun update via `sky.sun_position`, bridge day factor and sun angles, `regenerate` if `params_from` output changed, else `rebuild_meshes` at 10 Hz while any segment still grows), 60 s save, 1 h weather fetch on a `QThreadPool` runnable (result dict -> `sim.Outdoor(**w)` stored in `state.outdoor`, applied on the main thread), fetched once at startup.
 - [ ] `regenerate` coalesced by a 50 ms single-shot `QTimer`. `rebuild_meshes` uses `branch_arrays`, `leaf_arrays` (size from params), `fruit_arrays`.
 - [ ] Screenshot mode as specified under the contracts. Commit `feat(app): controller, timers, persistence, screenshot CLI`.
 
@@ -433,3 +435,4 @@ Screenshot CLI (`python -m fernal --screenshot PATH [--theme T] [--age H] [--see
 - Main (this session) checks between phases: tests green, screenshots opened and judged, contracts respected. The user judges visuals after Phase 2 and Phase 4.
 - An agent that fails its "Done when" twice is stopped; main asks the user whether to assign Fable to that task.
 - Every task commits only its own files; `app.py` is modified only by T7 (create), T9 (wire), T10 (fix).
+- Run what can run (user request): at every phase boundary main executes the runnable pieces itself and shows the result before starting the next phase. P0: view the spike screenshot. P1: full pytest run, plus a throwaway tree-to-PNG render if T4b/T4 are both done. P2: launch the real overlay and the screenshot CLI. P3: open every panel and press every button. P4: end-to-end run with the six final screenshots.
