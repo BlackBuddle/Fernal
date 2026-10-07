@@ -17,6 +17,7 @@ python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
 - Language: code, comments, docs, commit messages and agent prompts in English. Chat replies to the user in Korean.
 - Only `fernal/qml/Scene.qml` and its shaders are QML. All other UI is Qt Widgets in Python. UI copy is Korean.
 - Runtime deps: PySide6, numpy only. No new dependencies without asking.
+- Design work (UI panels, themes, scene look) follows the frontend-design skill: read C:/Users/2015k/.claude/plugins/marketplaces/claude-plugins-official/plugins/frontend-design/skills/frontend-design/SKILL.md first, write a short design plan (palette, type, layout, principles), check it against generic defaults, build, then critique screenshots and cut one accessory. Put this path in every design agent's prompt.
 - Models: visual tasks (scene, materials, textures, shaders, panel design) on Opus; logic on Sonnet; Fable only with explicit user approval.
 - Spec: `docs/superpowers/specs/2026-10-07-fernal-design.md`. Plan: `docs/superpowers/plans/2026-10-07-fernal-plan.md`. Follow the interface contracts in the plan.
 - Budget: two days, 16 hours. Cut order if late: particles -> wind shader -> falling leaf -> fruits.

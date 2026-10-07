@@ -20,6 +20,7 @@
 - Textures are committed PNGs under `fernal/assets/`, generated once by `scripts/make_textures.py`.
 - Scene units: centimeters. Trunk length 100. Y is up. Tree base at the origin; the pot sits below it.
 - Models: visual tasks (T4b, T5, T8, T11) run on Opus. Logic tasks run on Sonnet. Fable only after the user approves it for a specific task.
+- Design work (T8 panels, T11 polish) follows the frontend-design skill (path in CLAUDE.md): plan tokens first, review the plan against generic defaults, build, critique screenshots; UI copy follows its writing rules (plain verbs, one name per action, empty and error states say what to do). T8 was built before this rule was added, so T11 re-applies the skill to the panels as a full design pass.
 - Budget: 16 hours over two days. Cut order if late: particles -> wind shader -> falling leaf -> fruits.
 - Commit after each task: `feat(<module>): <summary>`.
 
