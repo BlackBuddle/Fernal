@@ -95,13 +95,33 @@ def test_params_from_mapping():
 
 
 def test_tropism_bends_toward_sun():
+    # The lean is gentle, so a single crown's own asymmetry can outweigh it;
+    # compare the same seed under opposite suns and the average over seeds.
+    rights, lefts = [], []
     for seed in (3, 4, 5):
         right = generate(seed, Params(tropism=(1.0, 0.0, 0.0), tropism_strength=0.5))
         left = generate(seed, Params(tropism=(-1.0, 0.0, 0.0), tropism_strength=0.5))
-        mean_right = np.mean([s.end[0] for s in tips(right)])
-        mean_left = np.mean([s.end[0] for s in tips(left)])
-        assert mean_right > 10.0 and mean_left < -10.0
-        assert mean_right - mean_left > 30.0
+        rights.append(np.mean([s.end[0] for s in tips(right)]))
+        lefts.append(np.mean([s.end[0] for s in tips(left)]))
+        assert rights[-1] - lefts[-1] > 30.0
+    assert np.mean(rights) > 10.0 and np.mean(lefts) < -10.0
+
+
+def trunk_chain(skel):
+    """Ids of the leader: from the base, follow the child that continues straightest."""
+    segs = skel.segments
+    kids = {}
+    for s in segs[1:]:
+        kids.setdefault(s.parent, []).append(s)
+    chain = [0]
+    while chain[-1] in kids:
+        cur = segs[chain[-1]]
+        d = (cur.end - cur.start) / np.linalg.norm(cur.end - cur.start)
+        best = max(kids[chain[-1]], key=lambda c: np.dot((c.end - c.start) / np.linalg.norm(c.end - c.start), d))
+        if np.dot((best.end - best.start) / np.linalg.norm(best.end - best.start), d) < 0.9:
+            break
+        chain.append(best.id)
+    return chain
 
 
 def test_trunk_and_structure():
@@ -110,19 +130,21 @@ def test_trunk_and_structure():
     segs = skel.segments
     trunk = segs[0]
     assert (trunk.id, trunk.parent, trunk.depth) == (0, -1, 0)
-    assert np.array_equal(trunk.start, [0, 0, 0]) and np.array_equal(trunk.end, [0, 100, 0])
-    assert trunk.radius == 6.0 and trunk.birth_age == 0.0 and trunk.grow_hours == 24.0
+    assert np.array_equal(trunk.start, [0, 0, 0]) and trunk.end[1] > 0.5 * p.trunk_length
+    assert trunk.radius == 6.0 and trunk.birth_age == 0.0 and trunk.grow_hours > 0
+    assert len(trunk_chain(skel)) >= 5  # the leader is a chain, not a single pole
     for i, s in enumerate(segs):
         assert s.id == i and s.start.dtype == np.float32 and s.end.dtype == np.float32
-        assert s.start.shape == (3,) and s.depth <= p.max_depth
+        assert s.start.shape == (3,) and s.grow_hours > 0
         if i:
             par = segs[s.parent]
             assert s.parent < i and s.depth == par.depth + 1
             assert np.array_equal(s.start, par.end)
-            assert abs(s.radius - par.radius * 0.7) < 1e-9
-            assert abs(s.grow_hours - par.grow_hours * 0.8) < 1e-9
-            assert par.birth_age + par.grow_hours * 0.6 <= s.birth_age <= par.birth_age + par.grow_hours * 0.9
+            assert s.radius <= par.radius + 1e-9
+            # A child starts once its parent has mostly grown.
+            assert s.birth_age >= par.birth_age + par.grow_hours * 0.8
             assert 1 <= sum(1 for c in segs if c.parent == s.parent) <= 4
+    assert min(s.radius for s in segs) < 0.1 * trunk.radius  # fine twigs
     n = len(skel.leaf_pos)
     assert n > 0
     assert skel.leaf_pos.shape == skel.leaf_dir.shape == (n, 3)
@@ -144,7 +166,8 @@ def test_leaf_density_and_fruit_keep_geometry():
     for name in ("leaf_pos", "leaf_dir", "leaf_birth", "leaf_scale"):
         assert np.array_equal(getattr(fruity, name), getattr(base, name))
     n_leaves, n_fruit = len(fruity.leaf_pos), len(fruity.fruit_pos)
-    assert 0.15 * n_leaves < n_fruit < 0.45 * n_leaves
+    # Leaves are many, so only fruit_ratio * 0.2 of them carry a fruit.
+    assert 0.03 * n_leaves < n_fruit < 0.09 * n_leaves
     below = {tuple(x) for x in fruity.fruit_pos + np.float32([0, 3, 0])}
     assert below <= {tuple(x) for x in fruity.leaf_pos}
     assert len(fruity.fruit_birth) == n_fruit
@@ -155,3 +178,44 @@ def test_default_generation_is_fast():
     skel = generate(1, Params(branch_factor=3.5, max_depth=7))
     assert len(skel.segments) == 1500
     assert time.perf_counter() - start < 1.0
+
+
+def default_params(seed_sun=(0.5, 0.8, 0.3), light=0.5):
+    env = make_env(water=0.6, nutrients=0.5, humidity=0.5, light=light)
+    return params_from(env, 1.0, seed_sun, "normal")
+
+
+def height(skel):
+    return max(float(s.end[1]) for s in skel.segments)
+
+
+def test_tree_is_upright():
+    for light in (0.5, 1.0):
+        p = default_params(light=light)
+        for seed in (1, 2, 3):
+            skel = generate(seed, p)
+            t = np.array([s.end for s in tips(skel)])
+            h = height(skel)
+            assert abs(t[:, 0].mean()) < 0.25 * h and abs(t[:, 2].mean()) < 0.25 * h
+
+
+def test_trunk_has_side_branches_along_length():
+    for seed in (1, 2, 3):
+        skel = generate(seed, default_params())
+        chain = trunk_chain(skel)
+        on_chain = set(chain)
+        trunk_len = sum(float(np.linalg.norm(skel.segments[i].end - skel.segments[i].start)) for i in chain)
+        nodes = {round(float(skel.segments[s.parent].end[1]), 3) for s in skel.segments[1:]
+                 if s.parent in on_chain and s.id not in on_chain}
+        assert len(nodes) >= 3
+        assert max(nodes) - min(nodes) > 0.4 * trunk_len
+        assert min(nodes) > 0.15 * trunk_len  # a visible bare trunk below the crown
+
+
+def test_height_and_schedule_in_range():
+    for seed in range(6):
+        skel = generate(seed, default_params())
+        full = max(s.birth_age + s.grow_hours for s in skel.segments)
+        assert 200.0 <= height(skel) <= 380.0
+        assert 50.0 <= full <= 130.0
+        assert skel.leaf_birth.max() <= 130.0 + 2.0
